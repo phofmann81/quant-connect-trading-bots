@@ -95,8 +95,12 @@ class Aron20(QCAlgorithm):
                 if midpoint_vwap_divergence_percent > 0: 
                     self.log(f"{symbol} direction long at {self.time}")
             
-                    if self.previous_minute_close_over_ema9(symbol) and self.is_new_high(bar, symbol): 
+                    if self.previous_minute_close_over_ema9(symbol) and self.is_new_high(bar, symbol) and not self.portfolio[symbol].invested: 
                         self.log(f"enter long for symbol {symbol} at {self.time}")
+                        self.set_holdings(symbol, 0.01)
+                        # check if we're already invested, otherwise open trade for 1% portfolio value
+                        # take profit at midpoint, stop loss mirrored below entry 
+
                 
                 # TODO implement short
                 # if midpoint_vwap_divergence_percent < 0: 
