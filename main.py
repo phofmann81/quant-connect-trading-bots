@@ -2,6 +2,7 @@
 from AlgorithmImports import *
 from tickers import get_tickers_list_as_string
 from fibonacci_retracement import FibonacciRetracementIndicator
+
 # endregion
 
 
@@ -15,8 +16,8 @@ class Aron20(QCAlgorithm):
         self.set_cash(100000)  # Set Strategy Cash
         berlin_time_zone_utc_plus_2 = "Europe/Berlin"
         self.set_time_zone(berlin_time_zone_utc_plus_2)
-        ticker_strings = get_tickers_list_as_string() #enable for prod
-        # ticker_strings = ["AAL", "ADBE"]  # speed up backtest
+        # ticker_strings = get_tickers_list_as_string() #enable for prod
+        ticker_strings = ["AMZN", "CSCO"]  # speed up backtest
 
         self.symbols = [
             self.add_equity(ticker_string, resolution=Resolution.MINUTE).Symbol
@@ -39,61 +40,33 @@ class Aron20(QCAlgorithm):
         self.entry_price = {}
         self.exit_price = {}
         self.previous_day = None
-        self.vwaps= {}
-        self.ema9s= {}
-        self.fibos = {}
-        
 
         for symbol in self.symbols:
             # Initialize indicator for each symbol
             self.identities[symbol] = self.identity(symbol)
             self.vwap[symbol] = self.VWAP(symbol, 60, Resolution.MINUTE)
             self.ema9[symbol] = self.EMA(symbol, 9, Resolution.Minute)
-            self.fibonacci_retracement_levels[symbol] = FibonacciRetracementIndicator(f"Fibo-{symbol}-daily")
-            self.register_indicator(symbol, self.fibonacci_retracement_levels[symbol], Resolution.Minute)
+            self.fibonacci_retracement_levels[symbol] = FibonacciRetracementIndicator(
+                f"Fibo-{symbol}-daily"
+            )
+            self.register_indicator(
+                symbol, self.fibonacci_retracement_levels[symbol], Resolution.Minute
+            )
 
             # Initialize daily high and low
             self.previous_minute_close[symbol] = float("-inf")
             self.previous_minute_high[symbol] = float("-inf")
 
-            # rolling windows for plot
-            self.closing_prices[symbol] = RollingWindow[float](20)
-            self.vwaps[symbol] = RollingWindow[float](20)
-            self.ema9s[symbol] = RollingWindow[float](20)
-            self.fibos[symbol] = ({
-                "_100": RollingWindow[float](20),
-                "_786": RollingWindow[float](20),
-                "_618": RollingWindow[float](20),
-                "_50": RollingWindow[float](20),
-                "_382": RollingWindow[float](20),
-                "_236": RollingWindow[float](20),
-                "_0": RollingWindow[float](20)
-            })        
-
+            # charting
             self.entry_price[symbol] = None
             self.exit_price[symbol] = None
-
-            # can't do this, too many data points for my tier 
-            # self.plot_indicator(
-            #     f"custom-{symbol.value}",                
-            #     self.identities[symbol],
-            #     self.vwap[symbol],
-            #     self.ema9[symbol],
-            #     self.fibonacci_retracement_levels[symbol]._100,
-            #     self.fibonacci_retracement_levels[symbol]._50,
-            #     self.fibonacci_retracement_levels[symbol]._382,
-            #     self.fibonacci_retracement_levels[symbol]._236,
-            #     self.fibonacci_retracement_levels[symbol]._0,                
-            # )
-
             self.chart_names[symbol] = f"Trade Chart {symbol.value}"
-
             self.charts[symbol] = Chart(self.chart_names[symbol])
-
             self.charts[symbol].add_series(CandlestickSeries("Price"))
             self.charts[symbol].add_series(Series("VWAP", SeriesType.Line, 0))
             self.charts[symbol].add_series(Series("EMA9", SeriesType.Line, 0))
             self.charts[symbol].add_series(Series("FIBO-100", SeriesType.Line, 0))
+            # skip those for now we only have 10 series per chart in current tier
             # self.charts[symbol].add_series(Series("FIBO-786", SeriesType.Line, 0))
             # self.charts[symbol].add_series(Series("FIBO-618", SeriesType.Line, 0))
             self.charts[symbol].add_series(Series("FIBO-50", SeriesType.Line, 0))
@@ -104,11 +77,11 @@ class Aron20(QCAlgorithm):
             self.charts[symbol].add_series(Series("Exit", SeriesType.SCATTER, 1))
             self.add_chart(self.charts[symbol])
 
-
     @staticmethod
-    def is_in_time_frame(current_time: datetime.time) -> bool: 
-        return time(18,0) < current_time < time(20,0)
+    def is_in_time_frame(current_time: datetime.time) -> bool:
+        return time(18, 0) < current_time < time(20, 0)
 
+    # TODO move into indicator
     def get_close_vwap_divergence_percent(self, bar, symbol) -> float:
         vwap_value = self.vwap[symbol].current.value
         return (vwap_value - bar.close) / vwap_value * 100
@@ -123,6 +96,7 @@ class Aron20(QCAlgorithm):
     def previous_minute_close_over_ema9(self, symbol) -> bool:
         return self.previous_minute_close[symbol] > self.ema9[symbol].Current.Value
 
+    # TODO move into indicator
     def is_new_high(self, bar, symbol):
         return self.previous_minute_high[symbol] < bar.high
 
@@ -133,32 +107,16 @@ class Aron20(QCAlgorithm):
         amount = self.get_take_profit_price(symbol) - bar.close
         return bar.close - amount
 
-    def update_rolling_windows(self, symbol, close): 
-        self.closing_prices[symbol].add(close) 
-        self.vwaps[symbol].add(self.vwap[symbol].current.value)
-        self.ema9s[symbol].add(self.ema9[symbol].current.value)
-        self.fibos[symbol]["_100"].add(self.fibonacci_retracement_levels[symbol]._100.current.value)
-        # self.fibos[symbol]["_786"].add(self.fibonacci_retracement_levels[symbol]._786.current.value)
-        # self.fibos[symbol]["_618"].add(self.fibonacci_retracement_levels[symbol]._618.current.value)
-        self.fibos[symbol]["_50"].add(self.fibonacci_retracement_levels[symbol]._50.current.value)
-        self.fibos[symbol]["_382"].add(self.fibonacci_retracement_levels[symbol]._382.current.value)
-        self.fibos[symbol]["_236"].add(self.fibonacci_retracement_levels[symbol]._236.current.value)
-        self.fibos[symbol]["_0"].add(self.fibonacci_retracement_levels[symbol]._0.current.value)
-
-
-
     def on_data(self, data):
         for symbol in self.symbols:
             if symbol not in data.Bars:
                 continue
-                        
+
             current_time = self.time.time()
             bar = data.Bars[symbol]
-            
-            if self.portfolio[symbol].invested: 
+
+            if self.portfolio[symbol].invested:
                 self.plot_trade(symbol, bar)
-            # self.update_rolling_windows(symbol, bar.close)
-            
 
             close_vwap_divergence_percent = self.get_close_vwap_divergence_percent(
                 bar, symbol
@@ -178,7 +136,11 @@ class Aron20(QCAlgorithm):
                     f"{symbol} meets the criteria with a divergence of {close_vwap_divergence_percent}% at {self.time}"
                 )
 
-                if vwap_is_above_50er_fibo and close_vwap_divergence_percent > 0 and close_is_below_23er_fibo:
+                if (
+                    vwap_is_above_50er_fibo
+                    and close_vwap_divergence_percent > 0
+                    and close_is_below_23er_fibo
+                ):
                     self.log(f"{symbol} direction long at {self.time}")
 
                     if (
@@ -189,7 +151,7 @@ class Aron20(QCAlgorithm):
                         self.log(f"enter long for symbol {symbol} at {self.time}")
                         # we'll not track market order tickets yet, TODO later to set more precise stop loss & take profit based on actual fill price
                         self.set_holdings(
-                            symbol, 0.01
+                            symbol=symbol, percentage=0.01
                         )  # enter with market order with 1% portfolio
 
                         # register take profit
@@ -206,23 +168,19 @@ class Aron20(QCAlgorithm):
                         )
                         # set up order index so we can cancel the opposite once filled
                         self.orders[stop_loss_ticket.order_id] = {
-                            "oco_order_id": take_profit_ticket.order_id, 
-                            "ticket": stop_loss_ticket
+                            "oco_order_id": take_profit_ticket.order_id,
                         }
                         self.orders[take_profit_ticket.order_id] = {
-                            "oco_order_id": stop_loss_ticket.order_id, 
-                            "ticket": take_profit_ticket
+                            "oco_order_id": stop_loss_ticket.order_id,
                         }
-
                         self.entry_price[symbol] = bar.close
-
-                        self.plot_trade(symbol=symbol, bar = bar)
+                        self.plot_trade(symbol=symbol, bar=bar)
 
                 # TODO implement short
                 # if midpoint_vwap_divergence_percent < 0:
-            
-            # liquidate all holdings by end of day 
-            if current_time >= time(21,59): 
+
+            # liquidate all holdings by end of day
+            if current_time >= time(22, 00):
                 [self.liquidate(symbol=symbol) for symbol in self.symbols]
 
             # update previous day / minute
@@ -230,28 +188,53 @@ class Aron20(QCAlgorithm):
             self.previous_minute_close[symbol] = bar.close
             self.previous_minute_high[symbol] = bar.high
 
-    
-    def plot_trade(self, symbol, bar): 
+    def plot_trade(self, symbol, bar):
         self.plot(chart=self.chart_names[symbol], series="Price", bar=bar)
-        self.plot(chart = self.chart_names[symbol], series="VWAP", value = self.vwap[symbol].current.value)
-        self.plot(chart = self.chart_names[symbol], series="EMA9", value = self.ema9[symbol].current.value)
-        self.plot(chart = self.chart_names[symbol], series="FIBO-100", value = self.fibonacci_retracement_levels[symbol]._100.current.value)
-        # self.plot(chart = self.chart_names[symbol], series="FIBO-786", value = self.fibos[symbol]["_786"][i])
-        # self.plot(chart = self.chart_names[symbol], series="FIBO-618", value = self.fibos[symbol]["_618"][i])
-        self.plot(chart = self.chart_names[symbol], series="FIBO-50", value = self.fibonacci_retracement_levels[symbol]._50.current.value)
-        self.plot(chart = self.chart_names[symbol], series="FIBO-382", value = self.fibonacci_retracement_levels[symbol]._382.current.value)
-        self.plot(chart = self.chart_names[symbol], series="FIBO-236", value = self.fibonacci_retracement_levels[symbol]._236.current.value)
-        self.plot(chart = self.chart_names[symbol], series="FIBO-0", value = self.fibonacci_retracement_levels[symbol]._0.current.value)
+        self.plot(
+            chart=self.chart_names[symbol],
+            series="VWAP",
+            value=self.vwap[symbol].current.value,
+        )
+        self.plot(
+            chart=self.chart_names[symbol],
+            series="EMA9",
+            value=self.ema9[symbol].current.value,
+        )
+        self.plot(
+            chart=self.chart_names[symbol],
+            series="FIBO-100",
+            value=self.fibonacci_retracement_levels[symbol]._100.current.value,
+        )
+        # skip 78 and 61 as we have max 10 series per chart in current tier
+        self.plot(
+            chart=self.chart_names[symbol],
+            series="FIBO-50",
+            value=self.fibonacci_retracement_levels[symbol]._50.current.value,
+        )
+        self.plot(
+            chart=self.chart_names[symbol],
+            series="FIBO-382",
+            value=self.fibonacci_retracement_levels[symbol]._382.current.value,
+        )
+        self.plot(
+            chart=self.chart_names[symbol],
+            series="FIBO-236",
+            value=self.fibonacci_retracement_levels[symbol]._236.current.value,
+        )
+        self.plot(
+            chart=self.chart_names[symbol],
+            series="FIBO-0",
+            value=self.fibonacci_retracement_levels[symbol]._0.current.value,
+        )
         if entry_price := self.entry_price[symbol]:
-            self.plot(chart = self.chart_names[symbol], series="Entry", value = entry_price)
+            self.plot(chart=self.chart_names[symbol], series="Entry", value=entry_price)
             self.entry_price[symbol] = None
-        if exit_price := self.exit_price[symbol]: 
-            self.plot(chart = self.chart_names[symbol], series="Exit", value = exit_price)
+        if exit_price := self.exit_price[symbol]:
+            self.plot(chart=self.chart_names[symbol], series="Exit", value=exit_price)
             self.exit_price[symbol] = None
 
-        
     def on_order_event(self, order_event: OrderEvent):
         if order_event.status == OrderStatus.FILLED:
             if (order := self.orders.get(order_event.order_id)) is not None:
                 self.transactions.cancel_order(order["oco_order_id"])
-                self.exit_price[order_event.symbol] = order_event.fill_price  
+                self.exit_price[order_event.symbol] = order_event.fill_price
