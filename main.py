@@ -37,8 +37,6 @@ class Aron20(QCAlgorithm):
         self.closing_prices = {}
         self.charts = {}
         self.chart_names = {}
-        self.entry_price = {}
-        self.exit_price = {}
         self.previous_day = None
 
         for symbol in self.symbols:
@@ -58,8 +56,6 @@ class Aron20(QCAlgorithm):
             self.previous_minute_high[symbol] = float("-inf")
 
             # charting
-            self.entry_price[symbol] = None
-            self.exit_price[symbol] = None
             self.chart_names[symbol] = f"Trade Chart {symbol.value}"
             self.charts[symbol] = Chart(self.chart_names[symbol])
             self.charts[symbol].add_series(CandlestickSeries("Price"))
@@ -173,7 +169,6 @@ class Aron20(QCAlgorithm):
                         self.orders[take_profit_ticket.order_id] = {
                             "oco_order_id": stop_loss_ticket.order_id,
                         }
-                        self.entry_price[symbol] = bar.close
                         self.plot_trade(symbol=symbol, bar=bar)
 
                 # TODO implement short
@@ -226,15 +221,19 @@ class Aron20(QCAlgorithm):
             series="FIBO-0",
             value=self.fibonacci_retracement_levels[symbol]._0.current.value,
         )
-        if entry_price := self.entry_price[symbol]:
-            self.plot(chart=self.chart_names[symbol], series="Entry", value=entry_price)
-            self.entry_price[symbol] = None
-        if exit_price := self.exit_price[symbol]:
-            self.plot(chart=self.chart_names[symbol], series="Exit", value=exit_price)
-            self.exit_price[symbol] = None
 
     def on_order_event(self, order_event: OrderEvent):
         if order_event.status == OrderStatus.FILLED:
-            if (order := self.orders.get(order_event.order_id)) is not None:
+            if (order := self.orders.get(order_event.order_id)) is not None:  # exit
                 self.transactions.cancel_order(order["oco_order_id"])
-                self.exit_price[order_event.symbol] = order_event.fill_price
+                self.plot(
+                    chart=self.chart_names[order_event.symbol],
+                    series="Exit",
+                    value=order_event.fill_price,
+                )
+            else:  # plot entry
+                self.plot(
+                    chart=self.chart_names[order_event.symbol],
+                    series="Entry",
+                    value=order_event.fill_price,
+                )
