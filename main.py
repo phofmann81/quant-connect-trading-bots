@@ -58,7 +58,7 @@ class Aron20(QCAlgorithm):
             # charting
             self.chart_names[symbol] = f"Trade Chart {symbol.value}"
             self.charts[symbol] = Chart(self.chart_names[symbol])
-            self.charts[symbol].add_series(CandlestickSeries("Price"))
+            self.charts[symbol].add_series(CandlestickSeries(name="Price", index=0))
             self.charts[symbol].add_series(Series("VWAP", SeriesType.Line, 0))
             self.charts[symbol].add_series(Series("EMA9", SeriesType.Line, 0))
             self.charts[symbol].add_series(Series("FIBO-100", SeriesType.Line, 0))
@@ -69,8 +69,8 @@ class Aron20(QCAlgorithm):
             self.charts[symbol].add_series(Series("FIBO-382", SeriesType.Line, 0))
             self.charts[symbol].add_series(Series("FIBO-236", SeriesType.Line, 0))
             self.charts[symbol].add_series(Series("FIBO-0", SeriesType.Line, 0))
-            self.charts[symbol].add_series(Series("Entry", SeriesType.SCATTER, 1))
-            self.charts[symbol].add_series(Series("Exit", SeriesType.SCATTER, 1))
+            self.charts[symbol].add_series(Series("Entry", SeriesType.SCATTER, 0))
+            self.charts[symbol].add_series(Series("Exit", SeriesType.SCATTER, 0))
             self.add_chart(self.charts[symbol])
 
     @staticmethod
