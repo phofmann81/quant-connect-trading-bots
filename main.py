@@ -16,8 +16,8 @@ class Aron20(QCAlgorithm):
         self.set_cash(100000)  # Set Strategy Cash
         berlin_time_zone_utc_plus_2 = "Europe/Berlin"
         self.set_time_zone(berlin_time_zone_utc_plus_2)
-        # ticker_strings = get_tickers_list_as_string() #enable for prod
-        ticker_strings = ["AMZN", "CSCO"]  # speed up backtest
+        ticker_strings = get_tickers_list_as_string()  # enable for prod
+        # ticker_strings = ["AMZN", "CSCO"]  # speed up backtest
 
         self.symbols = [
             self.add_equity(ticker_string, resolution=Resolution.MINUTE).Symbol
@@ -28,6 +28,7 @@ class Aron20(QCAlgorithm):
         self.ema9 = {}
         self.identities = {}
         self.fibonacci_retracement_levels = {}
+        self._wilr = {}
         self.previous_minute_close = {}
         self.previous_minute_high = {}
         self.current_minute_high = {}
@@ -44,6 +45,9 @@ class Aron20(QCAlgorithm):
             self.identities[symbol] = self.identity(symbol)
             self.vwap[symbol] = self.VWAP(symbol, 60, Resolution.MINUTE)
             self.ema9[symbol] = self.EMA(symbol, 9, Resolution.Minute)
+            self._wilr[symbol] = self.wilr(
+                symbol=symbol, period=14, resolution=Resolution.Minute
+            )
             self.fibonacci_retracement_levels[symbol] = FibonacciRetracementIndicator(
                 f"Fibo-{symbol}-daily"
             )
@@ -61,8 +65,9 @@ class Aron20(QCAlgorithm):
             self.charts[symbol].add_series(CandlestickSeries(name="Price", index=0))
             self.charts[symbol].add_series(Series("VWAP", SeriesType.Line, 0))
             self.charts[symbol].add_series(Series("EMA9", SeriesType.Line, 0))
-            self.charts[symbol].add_series(Series("FIBO-100", SeriesType.Line, 0))
+            self.charts[symbol].add_series(Series("WILR", SeriesType.Line, 1))
             # skip those for now we only have 10 series per chart in current tier
+            # self.charts[symbol].add_series(Series("FIBO-100", SeriesType.Line, 0))
             # self.charts[symbol].add_series(Series("FIBO-786", SeriesType.Line, 0))
             # self.charts[symbol].add_series(Series("FIBO-618", SeriesType.Line, 0))
             self.charts[symbol].add_series(Series("FIBO-50", SeriesType.Line, 0))
@@ -142,6 +147,9 @@ class Aron20(QCAlgorithm):
                     if (
                         self.previous_minute_close_over_ema9(symbol)
                         and self.is_new_high(bar, symbol)
+                        and (
+                            self._wilr[symbol].current.value < -90
+                        )  # short would be > -10
                         and not self.portfolio[symbol].invested
                     ):
                         self.log(f"enter long for symbol {symbol} at {self.time}")
@@ -197,9 +205,11 @@ class Aron20(QCAlgorithm):
         )
         self.plot(
             chart=self.chart_names[symbol],
-            series="FIBO-100",
-            value=self.fibonacci_retracement_levels[symbol]._100.current.value,
+            series="WILR",
+            value=self._wilr[symbol].current.value,
         )
+
+        # self.plot(chart = self.chart_names[symbol], series="FIBO-100", value = self.fibonacci_retracement_levels[symbol]._100.current.value)
         # skip 78 and 61 as we have max 10 series per chart in current tier
         self.plot(
             chart=self.chart_names[symbol],
