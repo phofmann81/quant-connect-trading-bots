@@ -2,6 +2,7 @@
 from AlgorithmImports import *
 from tickers import get_tickers_list_as_string
 from fibonacci_retracement import FibonacciRetracementIndicator
+from high_volume_universe_selection_model import HighVolumeUniverseSelectionModel
 
 # endregion
 
@@ -16,13 +17,19 @@ class Aron20(QCAlgorithm):
         self.set_cash(100000)  # Set Strategy Cash
         berlin_time_zone_utc_plus_2 = "Europe/Berlin"
         self.set_time_zone(berlin_time_zone_utc_plus_2)
-        ticker_strings = get_tickers_list_as_string()  # enable for prod
+        # ticker_strings = get_tickers_list_as_string()  # enable for prod
         # ticker_strings = ["AMZN", "CSCO"]  # speed up backtest
 
-        self.symbols = [
-            self.add_equity(ticker_string, resolution=Resolution.MINUTE).Symbol
-            for ticker_string in ticker_strings
-        ]
+        # self.symbols = [
+        #     self.add_equity(ticker_string, resolution=Resolution.MINUTE).Symbol
+        #     for ticker_string in ticker_strings
+        # ]
+        # Initialize the custom universe selection model
+        self.universe_settings.resolution = Resolution.MINUTE
+
+        self.add_universe_selection(HighVolumeUniverseSelectionModel())
+
+        self.symbols = [str(s) for s in self.UniverseManager.ActiveSecurities.Keys]
 
         self.vwap = {}
         self.ema9 = {}
@@ -80,7 +87,7 @@ class Aron20(QCAlgorithm):
 
     @staticmethod
     def is_in_time_frame(current_time: datetime.time) -> bool:
-        return time(18, 0) < current_time < time(20, 0)
+        return time(18, 0) < current_time < time(21, 0)
 
     # TODO move into indicator
     def get_close_vwap_divergence_percent(self, bar, symbol) -> float:
