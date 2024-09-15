@@ -19,8 +19,11 @@ class HighVolumeUniverseSelectionModel(FundamentalUniverseSelectionModel):
     ) -> list[Symbol]:
         """Custom universe selection based on volume filtering criteria"""
         # Filter coarse data by price and HasFundamentalData, then limit to top N by dollar volume
-        filtered = [x for x in fundamental if x.HasFundamentalData and x.Price > 10]
-        symbols = [x.Symbol for x in filtered[: self.top_n]]
+        symbols = [
+            x.Symbol
+            for x in fundamental
+            if x.HasFundamentalData and x.volume > self.volume_threshold
+        ]
 
         valid_symbols = []
         for symbol in symbols:
