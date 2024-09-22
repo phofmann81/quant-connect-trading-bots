@@ -18,18 +18,19 @@ class Aron20(QCAlgorithm):
         berlin_time_zone_utc_plus_2 = "Europe/Berlin"
         self.set_time_zone(berlin_time_zone_utc_plus_2)
         # ticker_strings = get_tickers_list_as_string()  # enable for prod
-        # ticker_strings = ["AMZN", "CSCO"]  # speed up backtest
+        ticker_strings = ["AMZN", "CSCO"]  # speed up backtest
 
-        # self.symbols = [
-        #     self.add_equity(ticker_string, resolution=Resolution.MINUTE).Symbol
-        #     for ticker_string in ticker_strings
-        # ]
+        self.symbols = [
+            self.add_equity(ticker_string, resolution=Resolution.MINUTE).Symbol
+            for ticker_string in ticker_strings
+        ]
         # Initialize the custom universe selection model
-        self.universe_settings.resolution = Resolution.MINUTE
+        # self.universe_settings.resolution = Resolution.MINUTE
+        # self.universe_settings.asynchronous = True
 
-        self.add_universe_selection(HighVolumeUniverseSelectionModel())
+        # self.add_universe_selection(HighVolumeUniverseSelectionModel())
 
-        self.symbols = [str(s) for s in self.UniverseManager.ActiveSecurities.Keys]
+        # self.symbols = [s for s in self.UniverseManager.ActiveSecurities.Keys]
 
         self.vwap = {}
         self.ema9 = {}
@@ -47,6 +48,11 @@ class Aron20(QCAlgorithm):
         self.chart_names = {}
         self.previous_day = None
 
+        # def on_securities_changed(self, changes: SecurityChanges) -> None:
+        #     added_symbols = [x.Symbol for x in changes.added_securities]
+        #     removed_symbols = [x.Symbol for x in changes.removed_securities]
+
+        #     if added_symbols:
         for symbol in self.symbols:
             # Initialize indicator for each symbol
             self.identities[symbol] = self.identity(symbol)
@@ -85,6 +91,12 @@ class Aron20(QCAlgorithm):
             self.charts[symbol].add_series(Series("Exit", SeriesType.SCATTER, 0))
             self.add_chart(self.charts[symbol])
 
+        # if removed_symbols:
+        #     for removed_symbol in removed_symbols:
+        #         self.remove_chart(self.charts[removed_symbol])
+        #         for d in [self.identities, self.vwap, self.ema9, self._wilr, self.fibonacci_retracement_levels, self.previous_minute_close, self.previous_minute_high, self.chart_names, self.charts]:
+        #             d.pop(removed_symbol)
+
     @staticmethod
     def is_in_time_frame(current_time: datetime.time) -> bool:
         return time(18, 0) < current_time < time(21, 0)
@@ -102,7 +114,7 @@ class Aron20(QCAlgorithm):
         return False
 
     def previous_minute_close_over_ema9(self, symbol) -> bool:
-        return self.previous_minute_close[symbol] > self.ema9[symbol].Current.Value
+        return self.previous_minute_close[symbol] > self.ema9[symbol].current.Value
 
     # TODO move into indicator
     def is_new_high(self, bar, symbol):
@@ -116,9 +128,22 @@ class Aron20(QCAlgorithm):
         return bar.close - amount
 
     def on_data(self, data):
-        for symbol in self.symbols:
+        if len(self.UniverseManager.ActiveSecurities.Keys) == 0:
+            return
+
+        for symbol in list(self.UniverseManager.ActiveSecurities.Keys):
             if symbol not in data.Bars:
                 continue
+
+            for indicator in [
+                self.identities,
+                self.vwap,
+                self.ema9,
+                self._wilr,
+                self.fibonacci_retracement_levels,
+            ]:
+                if not indicator[symbol].is_ready:
+                    continue
 
             current_time = self.time.time()
             bar = data.Bars[symbol]
@@ -131,10 +156,10 @@ class Aron20(QCAlgorithm):
             )
             vwap_is_above_50er_fibo = (
                 self.vwap[symbol].current.value
-                > self.fibonacci_retracement_levels[symbol]._50.value
+                > self.fibonacci_retracement_levels[symbol]._50.current.value
             )
             close_is_below_23er_fibo = (
-                bar.close < self.fibonacci_retracement_levels[symbol]._236.value
+                bar.close < self.fibonacci_retracement_levels[symbol]._236.current.value
             )
 
             if self.is_in_time_frame(self.time.time()) and self.is_significant(
