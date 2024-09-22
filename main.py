@@ -107,6 +107,10 @@ class Aron20(QCAlgorithm):
         return bar.close - amount
 
     def on_data(self, data):
+        current_time = self.time.time()
+        if not self.is_in_time_frame(current_time):
+            return
+
         for symbol in self.symbols:
             if symbol not in data.Bars:
                 self.log(f"symbol {symbol} not in data.Bars")
@@ -124,7 +128,6 @@ class Aron20(QCAlgorithm):
                     )
                     return None  # TODO pre-load indicators with historical values
 
-            current_time = self.time.time()
             bar = data.Bars[symbol]
 
             if self.portfolio[symbol].invested:
@@ -141,10 +144,7 @@ class Aron20(QCAlgorithm):
                 bar.close
                 < self._fibonacci_retracement_levels[symbol]._236.current.value
             )
-            current_time = self.time.time()
-            if self.is_in_time_frame(current_time) and self.is_significant(
-                close_vwap_divergence_percent
-            ):
+            if self.is_significant(close_vwap_divergence_percent):
                 self.log(
                     f"{symbol} meets the criteria with a divergence of {close_vwap_divergence_percent}% at {self.time}"
                 )
@@ -201,7 +201,7 @@ class Aron20(QCAlgorithm):
                         f"long direction for symbol {symbol} not valid\n"
                         f"vwap: {self._vwap[symbol].current.value} is not above \n"
                         f"50er fibo: {self._fibonacci_retracement_levels[symbol]._50.current.value}\n"
-                        f"close: {bar.close} is not below\n"
+                        f"OR close: {bar.close} is not below\n"
                         f"23er fibo: {self._fibonacci_retracement_levels[symbol]._236.current.value}\n"
                     )
             else:
