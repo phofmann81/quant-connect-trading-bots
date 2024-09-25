@@ -14,6 +14,7 @@ class Aron20(QCAlgorithm):
         self.set_brokerage_model(BrokerageName.ALPACA, AccountType.MARGIN)
         # liquidate all holdings by end of day
         self.default_order_properties.time_in_force = TimeInForce.DAY
+        self.settings.liquidate_enabled = True
 
         self.set_start_date(2024, 3, 22)  # Set Start Date
         self.set_cash(100000)  # Set Strategy Cash
@@ -42,6 +43,11 @@ class Aron20(QCAlgorithm):
         self.charts = {}
         self.chart_names = {}
         self.previous_day = None
+
+        # scheduled actions
+        self.schedule.on(
+            self.date_rules.every_day(), self.time_rules.at(21, 55), self.liquidate
+        )
 
         for symbol in self.symbols:
             # Initialize indicator for each symbol
