@@ -42,10 +42,17 @@ class Aron20(QCAlgorithm):
         self.charts = {}
         self.chart_names = {}
         self.previous_day = None
+        self.traded_today = {}
 
         # scheduled actions
         self.schedule.on(
             self.date_rules.every_day(), self.time_rules.at(21, 55), self.liquidate
+        )
+
+        self.schedule.on(
+            self.date_rules.every_day(),
+            self.time_rules.at(21, 55),
+            self.reset_traded_today,
         )
 
         for symbol in self.symbols:
@@ -108,6 +115,9 @@ class Aron20(QCAlgorithm):
             self.charts[symbol].add_series(Series("Exit", SeriesType.SCATTER, 0))
             self.add_chart(self.charts[symbol])
 
+    def reset_traded_today(self):
+        self.traded_today = {}
+
     def warm_up_indicator(self, symbol, periods: int, indicators: List[Indicator]):
         history = self.history[TradeBar](
             symbol=symbol, periods=periods, resolution=Resolution.Minute
@@ -135,9 +145,9 @@ class Aron20(QCAlgorithm):
         return False
 
     def previous_minute_close_over_ema9(self, symbol) -> bool:
-        return self.previous_minute_close[symbol] > self._ema9[symbol].current.value
+        return self.previous_minute_close[symbol] > self._ema9[symbol].previous.price
 
-    # TODO move into indicator
+    # TODO check if this has a few candles time to hit after the other gates are green
     def is_new_high(self, bar, symbol):
         return self.previous_minute_high[symbol] < bar.high
 
@@ -145,44 +155,51 @@ class Aron20(QCAlgorithm):
         return self.previous_minute_low[symbol] > bar.low
 
     def get_take_profit_price_long(self, symbol):
-        return self._fibonacci_retracement_levels[symbol]._382.current.value
+        return min(
+            self._fibonacci_retracement_levels[symbol]._50.current.value,
+            self._vwap[symbol].current.value,
+        )
 
     def get_take_profit_price_short(self, symbol):
-        return self._fibonacci_retracement_levels[symbol]._618.current.value
+        return max(
+            self._fibonacci_retracement_levels[symbol]._50.current.value,
+            self._vwap[symbol].current.value,
+        )
 
     def get_stop_loss_price_long(self, symbol, bar):
-        amount = self.get_take_profit_price_long(symbol) - bar.close
-        return bar.close - (amount / float(self.get_parameter("crv")))
+        return self._fibonacci_retracement_levels[symbol]._0.current.value - (
+            2 * self._atr[symbol].current.value
+        )
 
     def get_stop_loss_price_short(self, symbol, bar):
-        amount = bar.close - self.get_take_profit_price_short(symbol)
-        return bar.close + (amount / float(self.get_parameter("crv")))
-
-    def all_indicators_ready(self, symbol):
-        return all(
-            indicators[symbol].is_ready
-            for indicators in [
-                self._vwap,
-                self._ema9,
-                self._wilr,
-                self._fibonacci_retracement_levels,
-                self._atr,
-            ]
+        return self._fibonacci_retracement_levels[symbol]._100.current.value + (
+            2 * self._atr[symbol].current.value
         )
+
+    def stop_loss_has_enough_space_long(self, symbol, bar):
+        distance = bar.close - self.get_stop_loss_price_long(symbol, bar)
+        return (bar.close + distance) < self._fibonacci_retracement_levels[
+            symbol
+        ]._382.current.value
+
+    def stop_loss_has_enough_space_short(self, symbol, bar):
+        distance = self.get_stop_loss_price_short(symbol, bar) - bar.close
+        return (bar.close - distance) > self._fibonacci_retracement_levels[
+            symbol
+        ]._618.current.value
 
     def on_data(self, data):
         current_time = self.time.time()
-        if not self.is_in_time_frame(current_time):
-            return
 
         for symbol in self.symbols:
-            if symbol not in data.Bars:
+            if symbol not in data.Bars or symbol in self.traded_today:
                 continue
 
-            if not self.all_indicators_ready(symbol):
-                return None  # TODO pre-load indicators with historical values
-
             bar = data.Bars[symbol]
+
+            if not self.is_in_time_frame(current_time):
+                self.update_previous_minute_values(symbol, bar)
+                return None
 
             if self.portfolio[symbol].invested:
                 self.plot_trade(symbol, bar)
@@ -196,29 +213,15 @@ class Aron20(QCAlgorithm):
                 self._vwap[symbol].current.value
                 > self._fibonacci_retracement_levels[symbol]._50.current.value
             )
+            # long
             close_is_below_23er_fibo = (
                 bar.close
                 < self._fibonacci_retracement_levels[symbol]._236.current.value
             )
+            # short
             close_is_above_78er_fibo = (
                 bar.close
                 > self._fibonacci_retracement_levels[symbol]._786.current.value
-            )
-
-            stop_loss_has_enough_space = (
-                self.get_stop_loss_price_long(symbol, bar)
-                <= self._fibonacci_retracement_levels[symbol]._0.current.value
-                - 2 * self._atr[symbol].current.value
-            )
-
-            short_trade_distance = (
-                bar.close - self._fibonacci_retracement_levels[symbol]._50.current.value
-            )
-
-            stop_loss_has_enough_space_short = bar.close + (
-                short_trade_distance / float(self.get_parameter("crv"))
-            ) >= self._fibonacci_retracement_levels[symbol]._100.current.value + (
-                2 * self._atr[symbol].current.value
             )
 
             if self.is_significant(close_vwap_divergence_percent):
@@ -227,7 +230,7 @@ class Aron20(QCAlgorithm):
                     vwap_is_above_50er_fibo
                     and close_vwap_divergence_percent > 0
                     and close_is_below_23er_fibo
-                    and stop_loss_has_enough_space
+                    and self.stop_loss_has_enough_space_long(symbol, bar)
                 ):
 
                     if (
@@ -242,7 +245,7 @@ class Aron20(QCAlgorithm):
                         self.set_holdings(
                             symbol=symbol, percentage=0.01
                         )  # enter with market order with 1% portfolio
-
+                        self.traded_today[symbol] = True
                         # register take profit
                         take_profit_ticket = self.LimitOrder(
                             symbol,
@@ -267,16 +270,17 @@ class Aron20(QCAlgorithm):
                     not vwap_is_above_50er_fibo
                     and close_vwap_divergence_percent < 0
                     and close_is_above_78er_fibo
-                    and stop_loss_has_enough_space_short
+                    and self.stop_loss_has_enough_space_short(symbol, bar)
                 ):
 
                     if (
-                        not self.previous_minute_close_over_ema9(symbol)
+                        not self.previous_minute_close_over_ema9(symbol)  # TODO check
                         and self.is_new_low(bar, symbol)
                         and (self._wilr[symbol].current.value > -10)
                         and not self.portfolio[symbol].invested
                     ):
                         self.set_holdings(symbol=symbol, percentage=-0.01)
+                        self.traded_today[symbol] = True
 
                         # register take profit
                         take_profit_ticket = self.LimitOrder(
@@ -299,11 +303,12 @@ class Aron20(QCAlgorithm):
                         }
                         self.plot_trade(symbol=symbol, bar=bar)
 
-            # update previous day / minute
-            # TODO use rolling window of two bars here
-            self.previous_minute_close[symbol] = bar.close
-            self.previous_minute_high[symbol] = bar.high
-            self.previous_minute_low[symbol] = bar.low
+            self.update_previous_minute_values(symbol, bar)
+
+    def update_previous_minute_values(self, symbol, bar):
+        self.previous_minute_close[symbol] = bar.close
+        self.previous_minute_high[symbol] = bar.high
+        self.previous_minute_low[symbol] = bar.low
 
     def plot_trade(self, symbol, bar):
         self.plot(chart=self.chart_names[symbol], series="Price", bar=bar)
