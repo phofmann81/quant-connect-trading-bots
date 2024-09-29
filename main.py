@@ -4,8 +4,6 @@ from tickers import get_tickers_list_as_string
 from fibonacci_retracement import FibonacciRetracementIndicator
 from high_volume_universe_selection_model import HighVolumeUniverseSelectionModel
 
-# endregion
-
 
 class Aron20(QCAlgorithm):
 
@@ -102,7 +100,7 @@ class Aron20(QCAlgorithm):
             self.charts[symbol].add_series(CandlestickSeries(name="Price", index=0))
             self.charts[symbol].add_series(Series("VWAP", SeriesType.Line, 0))
             self.charts[symbol].add_series(Series("EMA9", SeriesType.Line, 0))
-            self.charts[symbol].add_series(Series("WILR", SeriesType.Line, 1))
+            # self.charts[symbol].add_series(Series("WILR", SeriesType.Line, 1))
             # skip those for now we only have 10 series per chart in current tier
             # self.charts[symbol].add_series(Series("FIBO-100", SeriesType.Line, 0))
             # self.charts[symbol].add_series(Series("FIBO-786", SeriesType.Line, 0))
@@ -130,7 +128,6 @@ class Aron20(QCAlgorithm):
     def is_in_time_frame(current_time: datetime.time) -> bool:
         return time(18, 0) < current_time < time(21, 0)
 
-    # TODO move into indicator
     def get_close_vwap_divergence_percent(self, bar, symbol) -> float:
         vwap_value = self._vwap[symbol].current.value
         return (vwap_value - bar.close) / vwap_value * 100
@@ -147,7 +144,6 @@ class Aron20(QCAlgorithm):
     def previous_minute_close_over_ema9(self, symbol) -> bool:
         return self.previous_minute_close[symbol] > self._ema9[symbol].previous.price
 
-    # TODO check if this has a few candles time to hit after the other gates are green
     def is_new_high(self, bar, symbol):
         return self.previous_minute_high[symbol] < bar.high
 
@@ -236,12 +232,9 @@ class Aron20(QCAlgorithm):
                     if (
                         self.previous_minute_close_over_ema9(symbol)
                         and self.is_new_high(bar, symbol)
-                        and (
-                            self._wilr[symbol].current.value < -90
-                        )  # short would be > -10
+                        and (self._wilr[symbol].current.value < -90)
                         and not self.portfolio[symbol].invested
                     ):
-                        # we'll not track market order tickets yet, TODO later to set more precise stop loss & take profit based on actual fill price
                         self.set_holdings(
                             symbol=symbol, percentage=0.01
                         )  # enter with market order with 1% portfolio
@@ -280,6 +273,7 @@ class Aron20(QCAlgorithm):
                         and not self.portfolio[symbol].invested
                     ):
                         self.set_holdings(symbol=symbol, percentage=-0.01)
+
                         self.traded_today[symbol] = True
 
                         # register take profit
@@ -322,11 +316,11 @@ class Aron20(QCAlgorithm):
             series="EMA9",
             value=self._ema9[symbol].current.value,
         )
-        self.plot(
-            chart=self.chart_names[symbol],
-            series="WILR",
-            value=self._wilr[symbol].current.value,
-        )
+        # self.plot(
+        #     chart=self.chart_names[symbol],
+        #     series="WILR",
+        #     value=self._wilr[symbol].current.value,
+        # )
 
         # self.plot(chart = self.chart_names[symbol], series="FIBO-100", value = self.fibonacci_retracement_levels[symbol]._100.current.value)
         # skip 78 and 61 as we have max 10 series per chart in current tier
