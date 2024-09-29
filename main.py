@@ -4,40 +4,34 @@ from tickers import get_tickers_list_as_string
 from fibonacci_retracement import FibonacciRetracementIndicator
 from high_volume_universe_selection_model import HighVolumeUniverseSelectionModel
 
-# endregion
-
 
 class Aron20(QCAlgorithm):
 
     def initialize(self):
         self.set_brokerage_model(BrokerageName.ALPACA, AccountType.MARGIN)
+        # liquidate all holdings by end of day
         self.default_order_properties.time_in_force = TimeInForce.DAY
+        self.settings.liquidate_enabled = True
 
-        self.set_start_date(2023, 9, 5)  # Set Start Date
+        self.set_start_date(2024, 3, 22)  # Set Start Date
         self.set_cash(100000)  # Set Strategy Cash
         berlin_time_zone_utc_plus_2 = "Europe/Berlin"
         self.set_time_zone(berlin_time_zone_utc_plus_2)
-        # ticker_strings = get_tickers_list_as_string()  # enable for prod
+        ticker_strings = get_tickers_list_as_string()  # enable for prod
         # ticker_strings = ["AMZN", "CSCO"]  # speed up backtest
 
-        # self.symbols = [
-        #     self.add_equity(ticker_string, resolution=Resolution.MINUTE).Symbol
-        #     for ticker_string in ticker_strings
-        # ]
-        # Initialize the custom universe selection model
-        self.universe_settings.resolution = Resolution.MINUTE
-
-        self.add_universe_selection(HighVolumeUniverseSelectionModel())
-
-        self.symbols = [str(s) for s in self.UniverseManager.ActiveSecurities.Keys]
-
-        self.vwap = {}
-        self.ema9 = {}
-        self.identities = {}
-        self.fibonacci_retracement_levels = {}
+        self.symbols = [
+            self.add_equity(ticker_string, resolution=Resolution.MINUTE).Symbol
+            for ticker_string in ticker_strings
+        ]
+        self._vwap = {}
+        self._ema9 = {}
+        self._fibonacci_retracement_levels = {}
         self._wilr = {}
+        self._atr = {}
         self.previous_minute_close = {}
         self.previous_minute_high = {}
+        self.previous_minute_low = {}
         self.current_minute_high = {}
         self.take_profit_order_ticket = {}
         self.stop_order_ticket = {}
@@ -46,25 +40,59 @@ class Aron20(QCAlgorithm):
         self.charts = {}
         self.chart_names = {}
         self.previous_day = None
+        self.traded_today = {}
+
+        # scheduled actions
+        self.schedule.on(
+            self.date_rules.every_day(), self.time_rules.at(21, 55), self.liquidate
+        )
+
+        self.schedule.on(
+            self.date_rules.every_day(),
+            self.time_rules.at(21, 55),
+            self.reset_traded_today,
+        )
 
         for symbol in self.symbols:
             # Initialize indicator for each symbol
-            self.identities[symbol] = self.identity(symbol)
-            self.vwap[symbol] = self.VWAP(symbol, 60, Resolution.MINUTE)
-            self.ema9[symbol] = self.EMA(symbol, 9, Resolution.Minute)
+            self._vwap[symbol] = self.vwap(symbol=symbol)
+            self._ema9[symbol] = self.ema(symbol=symbol, period=9)
             self._wilr[symbol] = self.wilr(
                 symbol=symbol, period=14, resolution=Resolution.Minute
             )
-            self.fibonacci_retracement_levels[symbol] = FibonacciRetracementIndicator(
+            one_day_in_minutes = 1440
+            self._atr[symbol] = self.ATR(
+                symbol=symbol, period=one_day_in_minutes, resolution=Resolution.Minute
+            )
+            # custom indicators
+            self._fibonacci_retracement_levels[symbol] = FibonacciRetracementIndicator(
                 f"Fibo-{symbol}-daily"
             )
             self.register_indicator(
-                symbol, self.fibonacci_retracement_levels[symbol], Resolution.Minute
+                symbol, self._fibonacci_retracement_levels[symbol], Resolution.Minute
+            )
+
+            # warm up indicators with full day
+            self.warm_up_indicator(
+                symbol=symbol,
+                periods=one_day_in_minutes,
+                indicators=[self._atr[symbol], self._vwap[symbol]],
+            )
+            # ema9s want indicator datapoint, not tradebar
+            history = self.history[TradeBar](
+                symbol=symbol, periods=9, resolution=Resolution.Minute
+            )
+            for bar in history:
+                self._ema9[symbol].update(IndicatorDataPoint(bar.end_time, bar.close))
+
+            self.warm_up_indicator(
+                symbol=symbol, periods=14, indicators=[self._wilr[symbol]]
             )
 
             # Initialize daily high and low
             self.previous_minute_close[symbol] = float("-inf")
             self.previous_minute_high[symbol] = float("-inf")
+            self.previous_minute_low[symbol] = float("inf")
 
             # charting
             self.chart_names[symbol] = f"Trade Chart {symbol.value}"
@@ -72,7 +100,7 @@ class Aron20(QCAlgorithm):
             self.charts[symbol].add_series(CandlestickSeries(name="Price", index=0))
             self.charts[symbol].add_series(Series("VWAP", SeriesType.Line, 0))
             self.charts[symbol].add_series(Series("EMA9", SeriesType.Line, 0))
-            self.charts[symbol].add_series(Series("WILR", SeriesType.Line, 1))
+            # self.charts[symbol].add_series(Series("WILR", SeriesType.Line, 1))
             # skip those for now we only have 10 series per chart in current tier
             # self.charts[symbol].add_series(Series("FIBO-100", SeriesType.Line, 0))
             # self.charts[symbol].add_series(Series("FIBO-786", SeriesType.Line, 0))
@@ -85,43 +113,89 @@ class Aron20(QCAlgorithm):
             self.charts[symbol].add_series(Series("Exit", SeriesType.SCATTER, 0))
             self.add_chart(self.charts[symbol])
 
+    def reset_traded_today(self):
+        self.traded_today = {}
+
+    def warm_up_indicator(self, symbol, periods: int, indicators: List[Indicator]):
+        history = self.history[TradeBar](
+            symbol=symbol, periods=periods, resolution=Resolution.Minute
+        )
+        for bar in history:
+            for indicator in indicators:
+                indicator.update(bar)
+
     @staticmethod
     def is_in_time_frame(current_time: datetime.time) -> bool:
         return time(18, 0) < current_time < time(21, 0)
 
-    # TODO move into indicator
     def get_close_vwap_divergence_percent(self, bar, symbol) -> float:
-        vwap_value = self.vwap[symbol].current.value
+        vwap_value = self._vwap[symbol].current.value
         return (vwap_value - bar.close) / vwap_value * 100
 
     def is_significant(self, close_price_vwap_divergence_percent: float):
         if (
-            3 >= abs(close_price_vwap_divergence_percent) >= 0.25
+            3
+            >= abs(close_price_vwap_divergence_percent)
+            >= float(self.get_parameter("close_vwap_div_threshold"))
         ):  # relax to 0.5 to get more values with less tickers for testing
             return True
         return False
 
     def previous_minute_close_over_ema9(self, symbol) -> bool:
-        return self.previous_minute_close[symbol] > self.ema9[symbol].Current.Value
+        return self.previous_minute_close[symbol] > self._ema9[symbol].previous.price
 
-    # TODO move into indicator
     def is_new_high(self, bar, symbol):
         return self.previous_minute_high[symbol] < bar.high
 
-    def get_take_profit_price(self, symbol):
-        return self.fibonacci_retracement_levels[symbol]._382.value
+    def is_new_low(self, bar, symbol):
+        return self.previous_minute_low[symbol] > bar.low
 
-    def get_stop_loss_price(self, symbol, bar):
-        amount = self.get_take_profit_price(symbol) - bar.close
-        return bar.close - amount
+    def get_take_profit_price_long(self, symbol):
+        return min(
+            self._fibonacci_retracement_levels[symbol]._50.current.value,
+            self._vwap[symbol].current.value,
+        )
+
+    def get_take_profit_price_short(self, symbol):
+        return max(
+            self._fibonacci_retracement_levels[symbol]._50.current.value,
+            self._vwap[symbol].current.value,
+        )
+
+    def get_stop_loss_price_long(self, symbol, bar):
+        return self._fibonacci_retracement_levels[symbol]._0.current.value - (
+            2 * self._atr[symbol].current.value
+        )
+
+    def get_stop_loss_price_short(self, symbol, bar):
+        return self._fibonacci_retracement_levels[symbol]._100.current.value + (
+            2 * self._atr[symbol].current.value
+        )
+
+    def stop_loss_has_enough_space_long(self, symbol, bar):
+        distance = bar.close - self.get_stop_loss_price_long(symbol, bar)
+        return (bar.close + distance) < self._fibonacci_retracement_levels[
+            symbol
+        ]._382.current.value
+
+    def stop_loss_has_enough_space_short(self, symbol, bar):
+        distance = self.get_stop_loss_price_short(symbol, bar) - bar.close
+        return (bar.close - distance) > self._fibonacci_retracement_levels[
+            symbol
+        ]._618.current.value
 
     def on_data(self, data):
+        current_time = self.time.time()
+
         for symbol in self.symbols:
-            if symbol not in data.Bars:
+            if symbol not in data.Bars or symbol in self.traded_today:
                 continue
 
-            current_time = self.time.time()
             bar = data.Bars[symbol]
+
+            if not self.is_in_time_frame(current_time):
+                self.update_previous_minute_values(symbol, bar)
+                return None
 
             if self.portfolio[symbol].invested:
                 self.plot_trade(symbol, bar)
@@ -129,53 +203,90 @@ class Aron20(QCAlgorithm):
             close_vwap_divergence_percent = self.get_close_vwap_divergence_percent(
                 bar, symbol
             )
+
+            # long
             vwap_is_above_50er_fibo = (
-                self.vwap[symbol].current.value
-                > self.fibonacci_retracement_levels[symbol]._50.value
+                self._vwap[symbol].current.value
+                > self._fibonacci_retracement_levels[symbol]._50.current.value
             )
+            # long
             close_is_below_23er_fibo = (
-                bar.close < self.fibonacci_retracement_levels[symbol]._236.value
+                bar.close
+                < self._fibonacci_retracement_levels[symbol]._236.current.value
+            )
+            # short
+            close_is_above_78er_fibo = (
+                bar.close
+                > self._fibonacci_retracement_levels[symbol]._786.current.value
             )
 
-            if self.is_in_time_frame(self.time.time()) and self.is_significant(
-                close_vwap_divergence_percent
-            ):
-                self.log(
-                    f"{symbol} meets the criteria with a divergence of {close_vwap_divergence_percent}% at {self.time}"
-                )
+            if self.is_significant(close_vwap_divergence_percent):
 
                 if (
                     vwap_is_above_50er_fibo
                     and close_vwap_divergence_percent > 0
                     and close_is_below_23er_fibo
+                    and self.stop_loss_has_enough_space_long(symbol, bar)
                 ):
-                    self.log(f"{symbol} direction long at {self.time}")
 
                     if (
                         self.previous_minute_close_over_ema9(symbol)
                         and self.is_new_high(bar, symbol)
-                        and (
-                            self._wilr[symbol].current.value < -90
-                        )  # short would be > -10
+                        and (self._wilr[symbol].current.value < -90)
                         and not self.portfolio[symbol].invested
                     ):
-                        self.log(f"enter long for symbol {symbol} at {self.time}")
-                        # we'll not track market order tickets yet, TODO later to set more precise stop loss & take profit based on actual fill price
                         self.set_holdings(
                             symbol=symbol, percentage=0.01
                         )  # enter with market order with 1% portfolio
-
+                        self.traded_today[symbol] = True
                         # register take profit
                         take_profit_ticket = self.LimitOrder(
                             symbol,
                             -self.Portfolio[symbol].Quantity,
-                            self.get_take_profit_price(symbol),
+                            self.get_take_profit_price_long(symbol),
                         )
                         # register stop loss
                         stop_loss_ticket = self.StopMarketOrder(
                             symbol,
                             -self.Portfolio[symbol].Quantity,
-                            self.get_stop_loss_price(symbol, bar),
+                            self.get_stop_loss_price_long(symbol, bar),
+                        )
+                        # set up order index so we can cancel the opposite once filled
+                        self.orders[stop_loss_ticket.order_id] = {
+                            "oco_order_id": take_profit_ticket.order_id,
+                        }
+                        self.orders[take_profit_ticket.order_id] = {
+                            "oco_order_id": stop_loss_ticket.order_id,
+                        }
+                        self.plot_trade(symbol=symbol, bar=bar)
+                elif (
+                    not vwap_is_above_50er_fibo
+                    and close_vwap_divergence_percent < 0
+                    and close_is_above_78er_fibo
+                    and self.stop_loss_has_enough_space_short(symbol, bar)
+                ):
+
+                    if (
+                        not self.previous_minute_close_over_ema9(symbol)  # TODO check
+                        and self.is_new_low(bar, symbol)
+                        and (self._wilr[symbol].current.value > -10)
+                        and not self.portfolio[symbol].invested
+                    ):
+                        self.set_holdings(symbol=symbol, percentage=-0.01)
+
+                        self.traded_today[symbol] = True
+
+                        # register take profit
+                        take_profit_ticket = self.LimitOrder(
+                            symbol,
+                            -self.Portfolio[symbol].Quantity,
+                            self.get_take_profit_price_short(symbol),
+                        )
+                        # register stop loss
+                        stop_loss_ticket = self.StopMarketOrder(
+                            symbol,
+                            -self.Portfolio[symbol].Quantity,
+                            self.get_stop_loss_price_short(symbol, bar),
                         )
                         # set up order index so we can cancel the opposite once filled
                         self.orders[stop_loss_ticket.order_id] = {
@@ -186,57 +297,52 @@ class Aron20(QCAlgorithm):
                         }
                         self.plot_trade(symbol=symbol, bar=bar)
 
-                # TODO implement short
-                # if midpoint_vwap_divergence_percent < 0:
+            self.update_previous_minute_values(symbol, bar)
 
-            # liquidate all holdings by end of day
-            if current_time >= time(22, 00):
-                [self.liquidate(symbol=symbol) for symbol in self.symbols]
-
-            # update previous day / minute
-            # TODO use rolling window of two bars here
-            self.previous_minute_close[symbol] = bar.close
-            self.previous_minute_high[symbol] = bar.high
+    def update_previous_minute_values(self, symbol, bar):
+        self.previous_minute_close[symbol] = bar.close
+        self.previous_minute_high[symbol] = bar.high
+        self.previous_minute_low[symbol] = bar.low
 
     def plot_trade(self, symbol, bar):
         self.plot(chart=self.chart_names[symbol], series="Price", bar=bar)
         self.plot(
             chart=self.chart_names[symbol],
             series="VWAP",
-            value=self.vwap[symbol].current.value,
+            value=self._vwap[symbol].current.value,
         )
         self.plot(
             chart=self.chart_names[symbol],
             series="EMA9",
-            value=self.ema9[symbol].current.value,
+            value=self._ema9[symbol].current.value,
         )
-        self.plot(
-            chart=self.chart_names[symbol],
-            series="WILR",
-            value=self._wilr[symbol].current.value,
-        )
+        # self.plot(
+        #     chart=self.chart_names[symbol],
+        #     series="WILR",
+        #     value=self._wilr[symbol].current.value,
+        # )
 
         # self.plot(chart = self.chart_names[symbol], series="FIBO-100", value = self.fibonacci_retracement_levels[symbol]._100.current.value)
         # skip 78 and 61 as we have max 10 series per chart in current tier
         self.plot(
             chart=self.chart_names[symbol],
             series="FIBO-50",
-            value=self.fibonacci_retracement_levels[symbol]._50.current.value,
+            value=self._fibonacci_retracement_levels[symbol]._50.current.value,
         )
         self.plot(
             chart=self.chart_names[symbol],
             series="FIBO-382",
-            value=self.fibonacci_retracement_levels[symbol]._382.current.value,
+            value=self._fibonacci_retracement_levels[symbol]._382.current.value,
         )
         self.plot(
             chart=self.chart_names[symbol],
             series="FIBO-236",
-            value=self.fibonacci_retracement_levels[symbol]._236.current.value,
+            value=self._fibonacci_retracement_levels[symbol]._236.current.value,
         )
         self.plot(
             chart=self.chart_names[symbol],
             series="FIBO-0",
-            value=self.fibonacci_retracement_levels[symbol]._0.current.value,
+            value=self._fibonacci_retracement_levels[symbol]._0.current.value,
         )
 
     def on_order_event(self, order_event: OrderEvent):

@@ -52,7 +52,7 @@ class FibonacciRetracementIndicator(PythonIndicator):
             self.current_low = min(self.current_low, input.Low)
 
         if self.current_high == self.current_low:
-            return None  # no fib if no diff
+            return False  # no fib if no diff
 
         diff = self.current_high - self.current_low
         low = self.current_low
@@ -62,7 +62,7 @@ class FibonacciRetracementIndicator(PythonIndicator):
             level.update(low, diff)
 
         # set 50er fib as value here as the interface demands. We'll only be using the level indicators anyway.
-        self.value = self.level_indicators[3].value
+        self.value = self._50.current.value
         self.current.set_value(self.value)
 
         return bool(self.current_high and self.current_low)
@@ -91,4 +91,4 @@ class FibonacciLevelIndicator(PythonIndicator):
         self.value = low + ((self.level / 100) * diff)
         self.current.set_value(self.value)
 
-        return bool(low and diff) and self.level != None
+        return bool(low and diff)
