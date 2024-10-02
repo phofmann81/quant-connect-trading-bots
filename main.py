@@ -60,9 +60,8 @@ class Aron20(QCAlgorithm):
             self._wilr[symbol] = self.wilr(
                 symbol=symbol, period=14, resolution=Resolution.Minute
             )
-            one_day_in_minutes = 1440
             self._atr[symbol] = self.ATR(
-                symbol=symbol, period=one_day_in_minutes, resolution=Resolution.Minute
+                symbol=symbol, period=14, resolution=Resolution.Minute
             )
             # custom indicators
             self._fibonacci_retracement_levels[symbol] = FibonacciRetracementIndicator(
@@ -75,7 +74,7 @@ class Aron20(QCAlgorithm):
             # warm up indicators with full day
             self.warm_up_indicator(
                 symbol=symbol,
-                periods=one_day_in_minutes,
+                periods=14,
                 indicators=[self._atr[symbol], self._vwap[symbol]],
             )
             # ema9s want indicator datapoint, not tradebar
@@ -151,16 +150,10 @@ class Aron20(QCAlgorithm):
         return self.previous_minute_low[symbol] > bar.low
 
     def get_take_profit_price_long(self, symbol):
-        return min(
-            self._fibonacci_retracement_levels[symbol]._50.current.value,
-            self._vwap[symbol].current.value,
-        )
+        return self._fibonacci_retracement_levels[symbol]._382.current.value
 
     def get_take_profit_price_short(self, symbol):
-        return max(
-            self._fibonacci_retracement_levels[symbol]._50.current.value,
-            self._vwap[symbol].current.value,
-        )
+        return self._fibonacci_retracement_levels[symbol]._618.current.value
 
     def get_stop_loss_price_long(self, symbol, bar):
         return self._fibonacci_retracement_levels[symbol]._0.current.value - (
@@ -173,16 +166,34 @@ class Aron20(QCAlgorithm):
         )
 
     def stop_loss_has_enough_space_long(self, symbol, bar):
-        distance = bar.close - self.get_stop_loss_price_long(symbol, bar)
-        return (bar.close + distance) < self._fibonacci_retracement_levels[
+        distance = self.stop_loss_distance_long(symbol, bar)
+        return ((bar.close + distance) * 1.3) <= self._fibonacci_retracement_levels[
             symbol
         ]._382.current.value
 
     def stop_loss_has_enough_space_short(self, symbol, bar):
-        distance = self.get_stop_loss_price_short(symbol, bar) - bar.close
-        return (bar.close - distance) > self._fibonacci_retracement_levels[
+        distance = self.stop_loss_distance_short(symbol, bar)
+        return (bar.close - distance) * 1.3 >= self._fibonacci_retracement_levels[
             symbol
         ]._618.current.value
+
+    def stop_loss_distance_long(self, symbol, bar):
+        return bar.close - self.get_stop_loss_price_long(symbol, bar)
+
+    def stop_loss_distance_short(self, symbol, bar):
+        return self.get_stop_loss_price_short(symbol, bar) - bar.close
+
+    def get_position_size(self, stop_loss_distance):
+        # Risk per trade is 1% of portfolio
+        risk_per_trade = self.portfolio.value * 0.01
+
+        # Risk per share is the difference between the current price and the stop loss distance
+        risk_per_share = stop_loss_distance
+
+        # Calculate the position size
+        position_size = risk_per_trade / risk_per_share
+
+        return position_size
 
     def on_data(self, data):
         current_time = self.time.time()
@@ -235,8 +246,11 @@ class Aron20(QCAlgorithm):
                         and (self._wilr[symbol].current.value < -90)
                         and not self.portfolio[symbol].invested
                     ):
-                        self.set_holdings(
-                            symbol=symbol, percentage=0.01
+                        self.market_order(
+                            symbol=symbol,
+                            quantity=self.get_position_size(
+                                self.stop_loss_distance_long(symbol, bar)
+                            ),
                         )  # enter with market order with 1% portfolio
                         self.traded_today[symbol] = True
                         # register take profit
@@ -272,7 +286,12 @@ class Aron20(QCAlgorithm):
                         and (self._wilr[symbol].current.value > -10)
                         and not self.portfolio[symbol].invested
                     ):
-                        self.set_holdings(symbol=symbol, percentage=-0.01)
+                        self.market_order(
+                            symbol=symbol,
+                            quantity=-self.get_position_size(
+                                self.stop_loss_distance_short(symbol, bar)
+                            ),
+                        )
 
                         self.traded_today[symbol] = True
 
