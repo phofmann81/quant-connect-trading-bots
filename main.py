@@ -4,11 +4,18 @@ from tickers import get_tickers_list_as_string
 from fibonacci_retracement import FibonacciRetracementIndicator
 from high_volume_universe_selection_model import HighVolumeUniverseSelectionModel
 
+# from oco_margin_model import OCOMarginModel
+
 
 class Aron20(QCAlgorithm):
 
     def initialize(self):
-        self.set_brokerage_model(BrokerageName.ALPACA, AccountType.MARGIN)
+        self.set_brokerage_model(
+            BrokerageName.INTERACTIVE_BROKERS_BROKERAGE, AccountType.MARGIN
+        )
+        self.total_trades = 0
+        self.winning_trades = 0
+
         # liquidate all holdings by end of day
         self.default_order_properties.time_in_force = TimeInForce.DAY
         self.settings.liquidate_enabled = True
@@ -20,10 +27,14 @@ class Aron20(QCAlgorithm):
         ticker_strings = get_tickers_list_as_string()  # enable for prod
         # ticker_strings = ["AMZN", "CSCO"]  # speed up backtest
 
-        self.symbols = [
-            self.add_equity(ticker_string, resolution=Resolution.MINUTE).Symbol
-            for ticker_string in ticker_strings
-        ]
+        self.symbols = []
+
+        for ticker_string in ticker_strings:
+            self.symbols.append(
+                self.add_equity(ticker_string, resolution=Resolution.MINUTE).Symbol
+            )
+            self.securities[ticker_string].set_margin_model(SecurityMarginModel.NULL)
+
         self._vwap = {}
         self._ema9 = {}
         self._fibonacci_retracement_levels = {}
@@ -185,7 +196,7 @@ class Aron20(QCAlgorithm):
 
     def get_position_size(self, stop_loss_distance):
         # Risk per trade is 1% of portfolio
-        risk_per_trade = self.portfolio.value * 0.01
+        risk_per_trade = self.portfolio.total_portfolio_value * 0.01
 
         # Risk per share is the difference between the current price and the stop loss distance
         risk_per_share = stop_loss_distance
@@ -194,6 +205,23 @@ class Aron20(QCAlgorithm):
         position_size = risk_per_trade / risk_per_share
 
         return position_size
+
+    def register_oco_orders(self, take_profit_ticket, stop_loss_ticket):
+        # set up order index so we can cancel the opposite once filled
+        self.orders[stop_loss_ticket.order_id] = {
+            "oco_order_id": take_profit_ticket.order_id,
+            "type": "stop_loss",
+        }
+        self.orders[take_profit_ticket.order_id] = {
+            "oco_order_id": stop_loss_ticket.order_id,
+            "type": "take_profit",
+        }
+        return None
+
+    def on_end_of_algorithm(self):
+        if self.total_trades > 0:
+            hit_rate = self.winning_trades / self.total_trades
+            self.debug(f"Hit Rate: {hit_rate:.2%}")
 
     def on_data(self, data):
         current_time = self.time.time()
@@ -265,13 +293,7 @@ class Aron20(QCAlgorithm):
                             -self.Portfolio[symbol].Quantity,
                             self.get_stop_loss_price_long(symbol, bar),
                         )
-                        # set up order index so we can cancel the opposite once filled
-                        self.orders[stop_loss_ticket.order_id] = {
-                            "oco_order_id": take_profit_ticket.order_id,
-                        }
-                        self.orders[take_profit_ticket.order_id] = {
-                            "oco_order_id": stop_loss_ticket.order_id,
-                        }
+                        self.register_oco_orders(take_profit_ticket, stop_loss_ticket)
                         self.plot_trade(symbol=symbol, bar=bar)
                 elif (
                     not vwap_is_above_50er_fibo
@@ -307,13 +329,8 @@ class Aron20(QCAlgorithm):
                             -self.Portfolio[symbol].Quantity,
                             self.get_stop_loss_price_short(symbol, bar),
                         )
-                        # set up order index so we can cancel the opposite once filled
-                        self.orders[stop_loss_ticket.order_id] = {
-                            "oco_order_id": take_profit_ticket.order_id,
-                        }
-                        self.orders[take_profit_ticket.order_id] = {
-                            "oco_order_id": stop_loss_ticket.order_id,
-                        }
+                        self.register_oco_orders(take_profit_ticket, stop_loss_ticket)
+
                         self.plot_trade(symbol=symbol, bar=bar)
 
             self.update_previous_minute_values(symbol, bar)
@@ -368,12 +385,15 @@ class Aron20(QCAlgorithm):
         if order_event.status == OrderStatus.FILLED:
             if (order := self.orders.get(order_event.order_id)) is not None:  # exit
                 self.transactions.cancel_order(order["oco_order_id"])
+                if order["type"] == "take_profit":
+                    self.winning_trades += 1
                 self.plot(
                     chart=self.chart_names[order_event.symbol],
                     series="Exit",
                     value=order_event.fill_price,
                 )
             else:  # plot entry
+                self.total_trades += 1
                 self.plot(
                     chart=self.chart_names[order_event.symbol],
                     series="Entry",
