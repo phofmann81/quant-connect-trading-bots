@@ -20,7 +20,7 @@ class Aron20(QCAlgorithm):
         self.default_order_properties.time_in_force = TimeInForce.DAY
         self.settings.liquidate_enabled = True
 
-        self.set_start_date(2024, 3, 22)  # Set Start Date
+        self.set_start_date(2024, 9, 17)  # Set Start Date
         self.set_cash(100000)  # Set Strategy Cash
         berlin_time_zone_utc_plus_2 = "Europe/Berlin"
         self.set_time_zone(berlin_time_zone_utc_plus_2)
@@ -234,7 +234,7 @@ class Aron20(QCAlgorithm):
 
             if not self.is_in_time_frame(current_time):
                 self.update_previous_minute_values(symbol, bar)
-                return None
+                continue
 
             if self.portfolio[symbol].invested:
                 self.plot_trade(symbol, bar)
