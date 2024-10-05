@@ -20,7 +20,7 @@ class Aron20(QCAlgorithm):
         self.default_order_properties.time_in_force = TimeInForce.DAY
         self.settings.liquidate_enabled = True
 
-        self.set_start_date(2024, 9, 17)  # Set Start Date
+        self.set_start_date(2023, 9, 17)  # Set Start Date
         self.set_cash(100000)  # Set Strategy Cash
         berlin_time_zone_utc_plus_2 = "Europe/Berlin"
         self.set_time_zone(berlin_time_zone_utc_plus_2)
@@ -112,12 +112,12 @@ class Aron20(QCAlgorithm):
             self.charts[symbol].add_series(Series("EMA9", SeriesType.Line, 0))
             # self.charts[symbol].add_series(Series("WILR", SeriesType.Line, 1))
             # skip those for now we only have 10 series per chart in current tier
-            # self.charts[symbol].add_series(Series("FIBO-100", SeriesType.Line, 0))
+            self.charts[symbol].add_series(Series("FIBO-100", SeriesType.Line, 0))
             # self.charts[symbol].add_series(Series("FIBO-786", SeriesType.Line, 0))
-            # self.charts[symbol].add_series(Series("FIBO-618", SeriesType.Line, 0))
+            self.charts[symbol].add_series(Series("FIBO-618", SeriesType.Line, 0))
             self.charts[symbol].add_series(Series("FIBO-50", SeriesType.Line, 0))
             self.charts[symbol].add_series(Series("FIBO-382", SeriesType.Line, 0))
-            self.charts[symbol].add_series(Series("FIBO-236", SeriesType.Line, 0))
+            # self.charts[symbol].add_series(Series("FIBO-236", SeriesType.Line, 0))
             self.charts[symbol].add_series(Series("FIBO-0", SeriesType.Line, 0))
             self.charts[symbol].add_series(Series("Entry", SeriesType.SCATTER, 0))
             self.charts[symbol].add_series(Series("Exit", SeriesType.SCATTER, 0))
@@ -151,14 +151,21 @@ class Aron20(QCAlgorithm):
             return True
         return False
 
-    def previous_minute_close_over_ema9(self, symbol) -> bool:
-        return self.previous_minute_close[symbol] > self._ema9[symbol].previous.price
+    def previous_minute_cross_over_ema9(self, symbol) -> bool:
+        return (
+            self.previous_minute_close[symbol] > self._ema9[symbol].previous.price
+        ) and (self.previous_minute_low[symbol] < self._ema9[symbol].previous.price)
+
+    def previous_minute_cross_under_ema9(self, symbol) -> bool:
+        return (
+            self.previous_minute_close[symbol] < self._ema9[symbol].previous.price
+        ) and (self.previous_minute_high[symbol] > self._ema9[symbol].previous.price)
 
     def is_new_high(self, bar, symbol):
-        return self.previous_minute_high[symbol] < bar.high
+        return self.previous_minute_close[symbol] < bar.close
 
     def is_new_low(self, bar, symbol):
-        return self.previous_minute_low[symbol] > bar.low
+        return self.previous_minute_close[symbol] > bar.close
 
     def get_take_profit_price_long(self, symbol):
         return self._fibonacci_retracement_levels[symbol]._382.current.value
@@ -178,15 +185,15 @@ class Aron20(QCAlgorithm):
 
     def stop_loss_has_enough_space_long(self, symbol, bar):
         distance = self.stop_loss_distance_long(symbol, bar)
-        return ((bar.close + distance) * 1.3) <= self._fibonacci_retracement_levels[
-            symbol
-        ]._382.current.value
+        return (bar.close + distance) * float(
+            self.get_parameter("crv")
+        ) <= self._fibonacci_retracement_levels[symbol]._382.current.value
 
     def stop_loss_has_enough_space_short(self, symbol, bar):
         distance = self.stop_loss_distance_short(symbol, bar)
-        return (bar.close - distance) * 1.3 >= self._fibonacci_retracement_levels[
-            symbol
-        ]._618.current.value
+        return (bar.close - distance) * float(
+            self.get_parameter("crv")
+        ) >= self._fibonacci_retracement_levels[symbol]._618.current.value
 
     def stop_loss_distance_long(self, symbol, bar):
         return bar.close - self.get_stop_loss_price_long(symbol, bar)
@@ -269,7 +276,7 @@ class Aron20(QCAlgorithm):
                 ):
 
                     if (
-                        self.previous_minute_close_over_ema9(symbol)
+                        self.previous_minute_cross_over_ema9(symbol)
                         and self.is_new_high(bar, symbol)
                         and (self._wilr[symbol].current.value < -90)
                         and not self.portfolio[symbol].invested
@@ -303,7 +310,7 @@ class Aron20(QCAlgorithm):
                 ):
 
                     if (
-                        not self.previous_minute_close_over_ema9(symbol)  # TODO check
+                        self.previous_minute_cross_under_ema9(symbol)
                         and self.is_new_low(bar, symbol)
                         and (self._wilr[symbol].current.value > -10)
                         and not self.portfolio[symbol].invested
@@ -352,14 +359,16 @@ class Aron20(QCAlgorithm):
             series="EMA9",
             value=self._ema9[symbol].current.value,
         )
-        # self.plot(
-        #     chart=self.chart_names[symbol],
-        #     series="WILR",
-        #     value=self._wilr[symbol].current.value,
-        # )
-
-        # self.plot(chart = self.chart_names[symbol], series="FIBO-100", value = self.fibonacci_retracement_levels[symbol]._100.current.value)
-        # skip 78 and 61 as we have max 10 series per chart in current tier
+        self.plot(
+            chart=self.chart_names[symbol],
+            series="FIBO-100",
+            value=self._fibonacci_retracement_levels[symbol]._100.current.value,
+        )
+        self.plot(
+            chart=self.chart_names[symbol],
+            series="FIBO-618",
+            value=self._fibonacci_retracement_levels[symbol]._618.current.value,
+        )
         self.plot(
             chart=self.chart_names[symbol],
             series="FIBO-50",
@@ -369,11 +378,6 @@ class Aron20(QCAlgorithm):
             chart=self.chart_names[symbol],
             series="FIBO-382",
             value=self._fibonacci_retracement_levels[symbol]._382.current.value,
-        )
-        self.plot(
-            chart=self.chart_names[symbol],
-            series="FIBO-236",
-            value=self._fibonacci_retracement_levels[symbol]._236.current.value,
         )
         self.plot(
             chart=self.chart_names[symbol],
