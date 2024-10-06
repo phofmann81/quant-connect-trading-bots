@@ -67,12 +67,12 @@ class Aron20(QCAlgorithm):
 
         for symbol in self.symbols:
             # Initialize indicator for each symbol
-            self._close_window[symbol] = RollingWindow[float](5)
-            self._ema9_window[symbol] = RollingWindow[float](5)
+            self._close_window[symbol] = RollingWindow[float](10)
+            self._ema9_window[symbol] = RollingWindow[float](10)
             self._vwap[symbol] = self.vwap(symbol=symbol)
             self._ema9[symbol] = self.ema(symbol=symbol, period=9)
             self._wilr[symbol] = self.wilr(
-                symbol=symbol, period=14, resolution=Resolution.Minute
+                symbol=symbol, period=180, resolution=Resolution.Minute
             )
             self._atr[symbol] = self.ATR(
                 symbol=symbol, period=14, resolution=Resolution.Minute
@@ -99,7 +99,7 @@ class Aron20(QCAlgorithm):
                 self._ema9[symbol].update(IndicatorDataPoint(bar.end_time, bar.close))
 
             self.warm_up_indicator(
-                symbol=symbol, periods=14, indicators=[self._wilr[symbol]]
+                symbol=symbol, periods=180, indicators=[self._wilr[symbol]]
             )
 
             # Initialize daily high and low
@@ -156,8 +156,8 @@ class Aron20(QCAlgorithm):
 
     def previous_minutes_close_over_ema9(self, symbol) -> bool:
         for close, ema9 in zip(
-            self._close_window[symbol][:-1],
-            self._ema9_window[symbol][:-1],
+            list(self._close_window[symbol])[1:],
+            list(self._ema9_window[symbol])[1:],
         ):
             if close > ema9:
                 return close
@@ -194,14 +194,14 @@ class Aron20(QCAlgorithm):
 
     def stop_loss_has_enough_space_long(self, symbol, bar):
         distance = self.stop_loss_distance_long(symbol, bar)
-        return (bar.close + distance) * float(
-            self.get_parameter("crv")
+        return (
+            bar.close + (distance * float(self.get_parameter("crv")))
         ) <= self._fibonacci_retracement_levels[symbol]._382.current.value
 
     def stop_loss_has_enough_space_short(self, symbol, bar):
         distance = self.stop_loss_distance_short(symbol, bar)
-        return (bar.close - distance) * float(
-            self.get_parameter("crv")
+        return (
+            bar.close - (distance * float(self.get_parameter("crv")))
         ) >= self._fibonacci_retracement_levels[symbol]._618.current.value
 
     def stop_loss_distance_long(self, symbol, bar):
@@ -287,11 +287,11 @@ class Aron20(QCAlgorithm):
                 ):
 
                     if (
-                        self.previous_minutes_close_over_ema9_and_is_new_high(
+                        not self.portfolio[symbol].invested
+                        and self.previous_minutes_close_over_ema9_and_is_new_high(
                             bar, symbol
                         )
                         and (self._wilr[symbol].current.value < -90)
-                        and not self.portfolio[symbol].invested
                     ):
                         self.market_order(
                             symbol=symbol,
