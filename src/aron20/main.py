@@ -4,26 +4,37 @@ from tickers import get_tickers_list_as_string
 from fibonacci_retracement import FibonacciRetracementIndicator
 from high_volume_universe_selection_model import HighVolumeUniverseSelectionModel
 
+# from oco_margin_model import OCOMarginModel
+
 
 class Aron20(QCAlgorithm):
 
     def initialize(self):
-        self.set_brokerage_model(BrokerageName.ALPACA, AccountType.MARGIN)
+        self.set_brokerage_model(
+            BrokerageName.INTERACTIVE_BROKERS_BROKERAGE, AccountType.MARGIN
+        )
+        self.total_trades = 0
+        self.winning_trades = 0
+
         # liquidate all holdings by end of day
         self.default_order_properties.time_in_force = TimeInForce.DAY
         self.settings.liquidate_enabled = True
 
-        self.set_start_date(2024, 3, 22)  # Set Start Date
+        self.set_start_date(2023, 9, 17)  # Set Start Date
         self.set_cash(100000)  # Set Strategy Cash
         berlin_time_zone_utc_plus_2 = "Europe/Berlin"
         self.set_time_zone(berlin_time_zone_utc_plus_2)
         ticker_strings = get_tickers_list_as_string()  # enable for prod
         # ticker_strings = ["AMZN", "CSCO"]  # speed up backtest
 
-        self.symbols = [
-            self.add_equity(ticker_string, resolution=Resolution.MINUTE).Symbol
-            for ticker_string in ticker_strings
-        ]
+        self.symbols = []
+
+        for ticker_string in ticker_strings:
+            self.symbols.append(
+                self.add_equity(ticker_string, resolution=Resolution.MINUTE).Symbol
+            )
+            self.securities[ticker_string].set_margin_model(SecurityMarginModel.NULL)
+
         self._vwap = {}
         self._ema9 = {}
         self._fibonacci_retracement_levels = {}
@@ -41,7 +52,8 @@ class Aron20(QCAlgorithm):
         self.chart_names = {}
         self.previous_day = None
         self.traded_today = {}
-
+        self._close_window = {}
+        self._ema9_window = {}
         # scheduled actions
         self.schedule.on(
             self.date_rules.every_day(), self.time_rules.at(21, 55), self.liquidate
@@ -55,14 +67,15 @@ class Aron20(QCAlgorithm):
 
         for symbol in self.symbols:
             # Initialize indicator for each symbol
+            self._close_window[symbol] = RollingWindow[float](10)
+            self._ema9_window[symbol] = RollingWindow[float](10)
             self._vwap[symbol] = self.vwap(symbol=symbol)
             self._ema9[symbol] = self.ema(symbol=symbol, period=9)
             self._wilr[symbol] = self.wilr(
-                symbol=symbol, period=14, resolution=Resolution.Minute
+                symbol=symbol, period=180, resolution=Resolution.Minute
             )
-            one_day_in_minutes = 1440
             self._atr[symbol] = self.ATR(
-                symbol=symbol, period=one_day_in_minutes, resolution=Resolution.Minute
+                symbol=symbol, period=14, resolution=Resolution.Minute
             )
             # custom indicators
             self._fibonacci_retracement_levels[symbol] = FibonacciRetracementIndicator(
@@ -75,7 +88,7 @@ class Aron20(QCAlgorithm):
             # warm up indicators with full day
             self.warm_up_indicator(
                 symbol=symbol,
-                periods=one_day_in_minutes,
+                periods=14,
                 indicators=[self._atr[symbol], self._vwap[symbol]],
             )
             # ema9s want indicator datapoint, not tradebar
@@ -86,7 +99,7 @@ class Aron20(QCAlgorithm):
                 self._ema9[symbol].update(IndicatorDataPoint(bar.end_time, bar.close))
 
             self.warm_up_indicator(
-                symbol=symbol, periods=14, indicators=[self._wilr[symbol]]
+                symbol=symbol, periods=180, indicators=[self._wilr[symbol]]
             )
 
             # Initialize daily high and low
@@ -102,12 +115,12 @@ class Aron20(QCAlgorithm):
             self.charts[symbol].add_series(Series("EMA9", SeriesType.Line, 0))
             # self.charts[symbol].add_series(Series("WILR", SeriesType.Line, 1))
             # skip those for now we only have 10 series per chart in current tier
-            # self.charts[symbol].add_series(Series("FIBO-100", SeriesType.Line, 0))
+            self.charts[symbol].add_series(Series("FIBO-100", SeriesType.Line, 0))
             # self.charts[symbol].add_series(Series("FIBO-786", SeriesType.Line, 0))
-            # self.charts[symbol].add_series(Series("FIBO-618", SeriesType.Line, 0))
+            self.charts[symbol].add_series(Series("FIBO-618", SeriesType.Line, 0))
             self.charts[symbol].add_series(Series("FIBO-50", SeriesType.Line, 0))
             self.charts[symbol].add_series(Series("FIBO-382", SeriesType.Line, 0))
-            self.charts[symbol].add_series(Series("FIBO-236", SeriesType.Line, 0))
+            # self.charts[symbol].add_series(Series("FIBO-236", SeriesType.Line, 0))
             self.charts[symbol].add_series(Series("FIBO-0", SeriesType.Line, 0))
             self.charts[symbol].add_series(Series("Entry", SeriesType.SCATTER, 0))
             self.charts[symbol].add_series(Series("Exit", SeriesType.SCATTER, 0))
@@ -141,26 +154,33 @@ class Aron20(QCAlgorithm):
             return True
         return False
 
-    def previous_minute_close_over_ema9(self, symbol) -> bool:
-        return self.previous_minute_close[symbol] > self._ema9[symbol].previous.price
+    def previous_minutes_close_over_ema9(self, symbol) -> bool:
+        for close, ema9 in zip(
+            list(self._close_window[symbol])[1:],
+            list(self._ema9_window[symbol])[1:],
+        ):
+            if close > ema9:
+                return close
+        return False
 
-    def is_new_high(self, bar, symbol):
-        return self.previous_minute_high[symbol] < bar.high
+    def previous_minutes_close_under_ema9(self, symbol) -> bool:
+        return self.previous_minute_close[symbol] < self._ema9[symbol].previous.price
+
+    def previous_minutes_close_over_ema9_and_is_new_high(self, bar, symbol):
+        if previous_minutes_close_over_ema9 := self.previous_minutes_close_over_ema9(
+            symbol
+        ):
+            return bar.close > previous_minutes_close_over_ema9
+        return False
 
     def is_new_low(self, bar, symbol):
-        return self.previous_minute_low[symbol] > bar.low
+        return self.previous_minute_close[symbol] > bar.close
 
     def get_take_profit_price_long(self, symbol):
-        return min(
-            self._fibonacci_retracement_levels[symbol]._50.current.value,
-            self._vwap[symbol].current.value,
-        )
+        return self._fibonacci_retracement_levels[symbol]._382.current.value
 
     def get_take_profit_price_short(self, symbol):
-        return max(
-            self._fibonacci_retracement_levels[symbol]._50.current.value,
-            self._vwap[symbol].current.value,
-        )
+        return self._fibonacci_retracement_levels[symbol]._618.current.value
 
     def get_stop_loss_price_long(self, symbol, bar):
         return self._fibonacci_retracement_levels[symbol]._0.current.value - (
@@ -173,16 +193,51 @@ class Aron20(QCAlgorithm):
         )
 
     def stop_loss_has_enough_space_long(self, symbol, bar):
-        distance = bar.close - self.get_stop_loss_price_long(symbol, bar)
-        return (bar.close + distance) < self._fibonacci_retracement_levels[
-            symbol
-        ]._382.current.value
+        distance = self.stop_loss_distance_long(symbol, bar)
+        return (
+            bar.close + (distance * float(self.get_parameter("crv")))
+        ) <= self._fibonacci_retracement_levels[symbol]._382.current.value
 
     def stop_loss_has_enough_space_short(self, symbol, bar):
-        distance = self.get_stop_loss_price_short(symbol, bar) - bar.close
-        return (bar.close - distance) > self._fibonacci_retracement_levels[
-            symbol
-        ]._618.current.value
+        distance = self.stop_loss_distance_short(symbol, bar)
+        return (
+            bar.close - (distance * float(self.get_parameter("crv")))
+        ) >= self._fibonacci_retracement_levels[symbol]._618.current.value
+
+    def stop_loss_distance_long(self, symbol, bar):
+        return bar.close - self.get_stop_loss_price_long(symbol, bar)
+
+    def stop_loss_distance_short(self, symbol, bar):
+        return self.get_stop_loss_price_short(symbol, bar) - bar.close
+
+    def get_position_size(self, stop_loss_distance):
+        # Risk per trade is 1% of portfolio
+        risk_per_trade = self.portfolio.total_portfolio_value * 0.01
+
+        # Risk per share is the difference between the current price and the stop loss distance
+        risk_per_share = stop_loss_distance
+
+        # Calculate the position size
+        position_size = risk_per_trade / risk_per_share
+
+        return int(position_size)
+
+    def register_oco_orders(self, take_profit_ticket, stop_loss_ticket):
+        # set up order index so we can cancel the opposite once filled
+        self.orders[stop_loss_ticket.order_id] = {
+            "oco_order_id": take_profit_ticket.order_id,
+            "type": "stop_loss",
+        }
+        self.orders[take_profit_ticket.order_id] = {
+            "oco_order_id": stop_loss_ticket.order_id,
+            "type": "take_profit",
+        }
+        return None
+
+    def on_end_of_algorithm(self):
+        if self.total_trades > 0:
+            hit_rate = self.winning_trades / self.total_trades
+            self.debug(f"Hit Rate: {hit_rate:.2%}")
 
     def on_data(self, data):
         current_time = self.time.time()
@@ -192,10 +247,12 @@ class Aron20(QCAlgorithm):
                 continue
 
             bar = data.Bars[symbol]
+            self._close_window[symbol].add(bar.close)
+            self._ema9_window[symbol].add(self._ema9[symbol].current.value)
 
             if not self.is_in_time_frame(current_time):
                 self.update_previous_minute_values(symbol, bar)
-                return None
+                continue
 
             if self.portfolio[symbol].invested:
                 self.plot_trade(symbol, bar)
@@ -230,13 +287,17 @@ class Aron20(QCAlgorithm):
                 ):
 
                     if (
-                        self.previous_minute_close_over_ema9(symbol)
-                        and self.is_new_high(bar, symbol)
+                        not self.portfolio[symbol].invested
+                        and self.previous_minutes_close_over_ema9_and_is_new_high(
+                            bar, symbol
+                        )
                         and (self._wilr[symbol].current.value < -90)
-                        and not self.portfolio[symbol].invested
                     ):
-                        self.set_holdings(
-                            symbol=symbol, percentage=0.01
+                        self.market_order(
+                            symbol=symbol,
+                            quantity=self.get_position_size(
+                                self.stop_loss_distance_long(symbol, bar)
+                            ),
                         )  # enter with market order with 1% portfolio
                         self.traded_today[symbol] = True
                         # register take profit
@@ -251,13 +312,7 @@ class Aron20(QCAlgorithm):
                             -self.Portfolio[symbol].Quantity,
                             self.get_stop_loss_price_long(symbol, bar),
                         )
-                        # set up order index so we can cancel the opposite once filled
-                        self.orders[stop_loss_ticket.order_id] = {
-                            "oco_order_id": take_profit_ticket.order_id,
-                        }
-                        self.orders[take_profit_ticket.order_id] = {
-                            "oco_order_id": stop_loss_ticket.order_id,
-                        }
+                        self.register_oco_orders(take_profit_ticket, stop_loss_ticket)
                         self.plot_trade(symbol=symbol, bar=bar)
                 elif (
                     not vwap_is_above_50er_fibo
@@ -267,12 +322,17 @@ class Aron20(QCAlgorithm):
                 ):
 
                     if (
-                        not self.previous_minute_close_over_ema9(symbol)  # TODO check
+                        self.previous_minutes_close_under_ema9(symbol)
                         and self.is_new_low(bar, symbol)
                         and (self._wilr[symbol].current.value > -10)
                         and not self.portfolio[symbol].invested
                     ):
-                        self.set_holdings(symbol=symbol, percentage=-0.01)
+                        self.market_order(
+                            symbol=symbol,
+                            quantity=-self.get_position_size(
+                                self.stop_loss_distance_short(symbol, bar)
+                            ),
+                        )
 
                         self.traded_today[symbol] = True
 
@@ -288,13 +348,8 @@ class Aron20(QCAlgorithm):
                             -self.Portfolio[symbol].Quantity,
                             self.get_stop_loss_price_short(symbol, bar),
                         )
-                        # set up order index so we can cancel the opposite once filled
-                        self.orders[stop_loss_ticket.order_id] = {
-                            "oco_order_id": take_profit_ticket.order_id,
-                        }
-                        self.orders[take_profit_ticket.order_id] = {
-                            "oco_order_id": stop_loss_ticket.order_id,
-                        }
+                        self.register_oco_orders(take_profit_ticket, stop_loss_ticket)
+
                         self.plot_trade(symbol=symbol, bar=bar)
 
             self.update_previous_minute_values(symbol, bar)
@@ -316,14 +371,16 @@ class Aron20(QCAlgorithm):
             series="EMA9",
             value=self._ema9[symbol].current.value,
         )
-        # self.plot(
-        #     chart=self.chart_names[symbol],
-        #     series="WILR",
-        #     value=self._wilr[symbol].current.value,
-        # )
-
-        # self.plot(chart = self.chart_names[symbol], series="FIBO-100", value = self.fibonacci_retracement_levels[symbol]._100.current.value)
-        # skip 78 and 61 as we have max 10 series per chart in current tier
+        self.plot(
+            chart=self.chart_names[symbol],
+            series="FIBO-100",
+            value=self._fibonacci_retracement_levels[symbol]._100.current.value,
+        )
+        self.plot(
+            chart=self.chart_names[symbol],
+            series="FIBO-618",
+            value=self._fibonacci_retracement_levels[symbol]._618.current.value,
+        )
         self.plot(
             chart=self.chart_names[symbol],
             series="FIBO-50",
@@ -336,11 +393,6 @@ class Aron20(QCAlgorithm):
         )
         self.plot(
             chart=self.chart_names[symbol],
-            series="FIBO-236",
-            value=self._fibonacci_retracement_levels[symbol]._236.current.value,
-        )
-        self.plot(
-            chart=self.chart_names[symbol],
             series="FIBO-0",
             value=self._fibonacci_retracement_levels[symbol]._0.current.value,
         )
@@ -349,12 +401,15 @@ class Aron20(QCAlgorithm):
         if order_event.status == OrderStatus.FILLED:
             if (order := self.orders.get(order_event.order_id)) is not None:  # exit
                 self.transactions.cancel_order(order["oco_order_id"])
+                if order["type"] == "take_profit":
+                    self.winning_trades += 1
                 self.plot(
                     chart=self.chart_names[order_event.symbol],
                     series="Exit",
                     value=order_event.fill_price,
                 )
             else:  # plot entry
+                self.total_trades += 1
                 self.plot(
                     chart=self.chart_names[order_event.symbol],
                     series="Entry",
