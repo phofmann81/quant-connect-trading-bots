@@ -52,7 +52,8 @@ class Aron20(QCAlgorithm):
         self.chart_names = {}
         self.previous_day = None
         self.traded_today = {}
-
+        self._close_window = {}
+        self._ema9_window = {}
         # scheduled actions
         self.schedule.on(
             self.date_rules.every_day(), self.time_rules.at(21, 55), self.liquidate
@@ -66,6 +67,8 @@ class Aron20(QCAlgorithm):
 
         for symbol in self.symbols:
             # Initialize indicator for each symbol
+            self._close_window[symbol] = RollingWindow[float](5)
+            self._ema9_window[symbol] = RollingWindow[float](5)
             self._vwap[symbol] = self.vwap(symbol=symbol)
             self._ema9[symbol] = self.ema(symbol=symbol, period=9)
             self._wilr[symbol] = self.wilr(
@@ -151,18 +154,24 @@ class Aron20(QCAlgorithm):
             return True
         return False
 
-    def previous_minute_cross_over_ema9(self, symbol) -> bool:
-        return (
-            self.previous_minute_close[symbol] > self._ema9[symbol].previous.price
-        ) and (self.previous_minute_low[symbol] < self._ema9[symbol].previous.price)
+    def previous_minutes_close_over_ema9(self, symbol) -> bool:
+        for close, ema9 in zip(
+            self._close_window[symbol][:-1],
+            self._ema9_window[symbol][:-1],
+        ):
+            if close > ema9:
+                return close
+        return False
 
-    def previous_minute_cross_under_ema9(self, symbol) -> bool:
-        return (
-            self.previous_minute_close[symbol] < self._ema9[symbol].previous.price
-        ) and (self.previous_minute_high[symbol] > self._ema9[symbol].previous.price)
+    def previous_minutes_close_under_ema9(self, symbol) -> bool:
+        return self.previous_minute_close[symbol] < self._ema9[symbol].previous.price
 
-    def is_new_high(self, bar, symbol):
-        return self.previous_minute_close[symbol] < bar.close
+    def previous_minutes_close_over_ema9_and_is_new_high(self, bar, symbol):
+        if previous_minutes_close_over_ema9 := self.previous_minutes_close_over_ema9(
+            symbol
+        ):
+            return bar.close > previous_minutes_close_over_ema9
+        return False
 
     def is_new_low(self, bar, symbol):
         return self.previous_minute_close[symbol] > bar.close
@@ -211,7 +220,7 @@ class Aron20(QCAlgorithm):
         # Calculate the position size
         position_size = risk_per_trade / risk_per_share
 
-        return position_size
+        return int(position_size)
 
     def register_oco_orders(self, take_profit_ticket, stop_loss_ticket):
         # set up order index so we can cancel the opposite once filled
@@ -238,6 +247,8 @@ class Aron20(QCAlgorithm):
                 continue
 
             bar = data.Bars[symbol]
+            self._close_window[symbol].add(bar.close)
+            self._ema9_window[symbol].add(self._ema9[symbol].current.value)
 
             if not self.is_in_time_frame(current_time):
                 self.update_previous_minute_values(symbol, bar)
@@ -276,8 +287,9 @@ class Aron20(QCAlgorithm):
                 ):
 
                     if (
-                        self.previous_minute_cross_over_ema9(symbol)
-                        and self.is_new_high(bar, symbol)
+                        self.previous_minutes_close_over_ema9_and_is_new_high(
+                            bar, symbol
+                        )
                         and (self._wilr[symbol].current.value < -90)
                         and not self.portfolio[symbol].invested
                     ):
@@ -310,7 +322,7 @@ class Aron20(QCAlgorithm):
                 ):
 
                     if (
-                        self.previous_minute_cross_under_ema9(symbol)
+                        self.previous_minutes_close_under_ema9(symbol)
                         and self.is_new_low(bar, symbol)
                         and (self._wilr[symbol].current.value > -10)
                         and not self.portfolio[symbol].invested
