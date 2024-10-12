@@ -20,7 +20,7 @@ class Aron20(QCAlgorithm):
         self.default_order_properties.time_in_force = TimeInForce.DAY
         self.settings.liquidate_enabled = True
 
-        self.set_start_date(2023, 9, 17)  # Set Start Date
+        self.set_start_date(2024, 1, 1)  # Set Start Date
         self.set_cash(100000)  # Set Strategy Cash
         berlin_time_zone_utc_plus_2 = "Europe/Berlin"
         self.set_time_zone(berlin_time_zone_utc_plus_2)
@@ -164,13 +164,26 @@ class Aron20(QCAlgorithm):
         return False
 
     def previous_minutes_close_under_ema9(self, symbol) -> bool:
-        return self.previous_minute_close[symbol] < self._ema9[symbol].previous.price
+        for close, ema9 in zip(
+            list(self._close_window[symbol])[1:],
+            list(self._ema9_window[symbol])[1:],
+        ):
+            if close < ema9:
+                return close
+        return False
 
     def previous_minutes_close_over_ema9_and_is_new_high(self, bar, symbol):
         if previous_minutes_close_over_ema9 := self.previous_minutes_close_over_ema9(
             symbol
         ):
             return bar.close > previous_minutes_close_over_ema9
+        return False
+
+    def previous_minutes_close_under_ema9_and_is_new_low(self, bar, symbol):
+        if previous_minutes_close_under_ema9 := self.previous_minutes_close_under_ema9(
+            symbol
+        ):
+            return bar.close < previous_minutes_close_under_ema9
         return False
 
     def is_new_low(self, bar, symbol):
@@ -322,8 +335,9 @@ class Aron20(QCAlgorithm):
                 ):
 
                     if (
-                        self.previous_minutes_close_under_ema9(symbol)
-                        and self.is_new_low(bar, symbol)
+                        self.previous_minutes_close_under_ema9_and_is_new_low(
+                            bar, symbol
+                        )
                         and (self._wilr[symbol].current.value > -10)
                         and not self.portfolio[symbol].invested
                     ):
