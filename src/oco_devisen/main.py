@@ -11,49 +11,68 @@ class OcODevisenStrategy(QCAlgorithm):
         self.set_cash(100000)
         berlin_time_zone_utc_plus_2 = "Europe/Berlin"
         self.set_time_zone(berlin_time_zone_utc_plus_2)
-        self._eur_usd_symbol = self.add_forex(
-            ticker="EURUSD", resolution=Resolution.MINUTE
-        ).symbol
+        self._eur_usd = self.add_forex(ticker="EURUSD", resolution=Resolution.MINUTE)
+        self._eur_usd_symbol = self._eur_usd.symbol
         self.orders = {}
-        self.pip_size = 0.00001
+        self.pip_size_breakout_padding = 0.2
+        self.stop_loss_pip_size = 5  # could be related to atr TODO parameterize
         self.bar_window = RollingWindow[TradeBar](
             61
         )  # TODO learn how to use consolidator for this
+        self._atr = self.atr(self._eur_usd_symbol, Resolution.Minute)
+
+        self.pip_size = (
+            self._eur_usd.symbol_properties.minimum_price_variation
+        )  # 1e-05 for eur-usd
+        self.lot_size = int(1 / self.pip_size) + 1
+        print("stop here")
+
+    def pip_value(self, current_price):
+        (self.pip_size / current_price) * self.lot_size
 
     def is_place_order_time(self) -> bool:
         return time(9, 0) > self.time.time() > time(8, 00)
 
     # TODO check if this works the same way for forex
-    def get_position_size(self, stop_loss_distance):
+    # need to convert the pip distance into lot
+    # if you want to risk 100 euro
+    # and one lot is 100.000 euro -> 0.001 lot
+    def position_size(self, stop_loss_distance):
         risk_per_trade = self.portfolio.total_portfolio_value * 0.01
-        risk_per_share = stop_loss_distance
-        position_size = risk_per_trade / risk_per_share
-        return int(position_size)
+        pip_size = stop_loss_distance
+        pip_risk = pip_size * self.pip_value(self._eur_usd_symbol.current_price)
+        lots = risk_per_trade / pip_risk
+        return lots
 
-    # TODO fix this for the minute resolution
     def stop_loss_distance(self, bar):
-        return (bar.high + self.pip_size) - (bar.low - self.pip_size)
+        return bar.close - self.stop_loss_price_long()
 
-    # TODO fix this for the minute resolution
-    def get_take_profit_price_long(self, bar):
-        return bar.close + (self.stop_loss_distance(bar) * 1, 5)  # TODO parameterize
+    def stop_loss_price_long(self):
+        return min(bar.low for bar in self.bar_window[:-1]) - self._atr.current.value
 
-    # TODO fix this for the minute resolution
-    def get_stop_loss_price_long(self, bar):
-        return bar.close - self.stop_loss_distance(bar)
+    def stop_loss_price_short(self, bar):
+        return bar.close + stop_loss_distance(bar)
 
-    # TODO fix this for the minute resolution
-    def get_take_profit_price_short(self, bar):
-        return bar.close - (self.stop_loss_distance(bar) * 1, 5)  # TODO parameterize
+    def take_profit_price_long(self, bar):
+        return bar.close + stop_loss_distance * float(parameters.get("reward_factor"))
+
+    def take_profit_price_short(self, bar):
+        return bar.close - (
+            self.stop_loss_distance(bar) * float(parameters.get("reward_factor"))
+        )
 
     def break_out(self, direction: str) -> bool:
         if direction == "long":
-            return self.bar_window[0].close > max(
-                bar.high for bar in self.bar_window[:-1]
+            return (
+                self.bar_window[0].close
+                > max(bar.high for bar in self.bar_window[:-1])
+                + self.pip_size_breakout_padding
             )
         if direction == "short":
-            return self.bar_window[0].close < min(
-                bar.low for bar in self.bar_window[:-1]
+            return (
+                self.bar_window[0].close
+                < min(bar.low for bar in self.bar_window[:-1])
+                - self.pip_size_breakout_padding
             )
 
     def on_data(self, data: Slice):
@@ -67,20 +86,20 @@ class OcODevisenStrategy(QCAlgorithm):
             if self.break_out(direction="long"):
                 self.market_order(
                     symbol=self._eur_usd_symbol,
-                    quantity=self.get_position_size(self.stop_loss_distance(bar=bar)),
+                    quantity=self.position_size(self.stop_loss_distance(bar=bar)),
                 )  # enter with market order with 1% portfolio
                 # TODO self.traded_today = True
                 # register take profit
                 take_profit_ticket = self.LimitOrder(
                     self._eur_usd_symbol,
                     -self.Portfolio[self._eur_usd_symbol].Quantity,
-                    self.get_take_profit_price_long(bar=bar),
+                    self.take_profit_price_long(bar=bar),
                 )
                 # register stop loss
                 stop_loss_ticket = self.StopMarketOrder(
                     symbol,
                     -self.Portfolio[self._eur_usd_symbol].Quantity,
-                    self.get_stop_loss_price_long(bar=data),
+                    self.stop_loss_price_long(bar=data),
                 )
                 self.register_oco_orders(take_profit_ticket, stop_loss_ticket)
 
@@ -88,20 +107,20 @@ class OcODevisenStrategy(QCAlgorithm):
                 # TODO refactor into bracket order to remove duplication
                 self.market_order(
                     symbol=self._eur_usd_symbol,
-                    quantity=-self.get_position_size(self.stop_loss_distance(bar=data)),
+                    quantity=-self.position_size(self.stop_loss_distance(bar=data)),
                 )  # enter with market order with 1% portfolio
                 # TODO self.traded_today = True
                 # register take profit
                 take_profit_ticket = self.LimitOrder(
                     self._eur_usd_symbol,
                     self.Portfolio[self._eur_usd_symbol].Quantity,
-                    self.get_take_profit_price_long(bar=data),
+                    self.take_profit_price_long(bar=data),
                 )
                 # register stop loss
                 stop_loss_ticket = self.StopMarketOrder(
                     symbol,
                     self.Portfolio[self._eur_usd_symbol].Quantity,
-                    self.get_stop_loss_price_long(bar=data),
+                    self.stop_loss_price_long(bar=data),
                 )
                 self.register_oco_orders(take_profit_ticket, stop_loss_ticket)
 
