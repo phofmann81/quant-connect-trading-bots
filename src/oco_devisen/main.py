@@ -7,7 +7,8 @@ from AlgorithmImports import *
 class OcODevisenStrategy(QCAlgorithm):
 
     def initialize(self):
-        self.set_start_date(2023, 4, 14)
+        self.set_start_date(2023, 1, 1)
+        self.set_end_date(2024, 10, 17)
         self.set_cash(100000)
         berlin_time_zone_utc_plus_2 = "Europe/Berlin"
         self.set_time_zone(berlin_time_zone_utc_plus_2)
@@ -136,12 +137,12 @@ class OcODevisenStrategy(QCAlgorithm):
                 )
                 take_profit_ticket = self.LimitOrder(
                     self._eur_usd_symbol,
-                    self.Portfolio[self._eur_usd_symbol].Quantity,
+                    -self.Portfolio[self._eur_usd_symbol].Quantity,
                     self.take_profit_price_short(bar=bar),
                 )
                 stop_loss_ticket = self.StopMarketOrder(
                     self._eur_usd_symbol,
-                    self.Portfolio[self._eur_usd_symbol].Quantity,
+                    -self.Portfolio[self._eur_usd_symbol].Quantity,
                     self.stop_loss_price_short(),
                 )
                 self.register_oco_orders(take_profit_ticket, stop_loss_ticket)
