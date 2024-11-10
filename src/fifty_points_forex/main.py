@@ -2,6 +2,7 @@
 from AlgorithmImports import *
 from symbol_data import SymbolData
 from trailing_stop_risk import TrailingStopRiskManagementModel
+from immediate_execution_model import ImmediateExecutionModel
 
 # endregion
 
@@ -24,21 +25,25 @@ class OcODevisenStrategy(QCAlgorithm):
         )
 
         symbols: List[Symbol] = [
-            self.add_forex(ticker=currency_pair, resolution=Resolution.HOUR).symbol
+            self.add_forex(ticker=currency_pair, resolution=Resolution.MINUTE).symbol
             for currency_pair in ["EURUSD", "GBPUSD", "EURGBP"]
         ]
 
         self.add_universe_selection(ManualUniverseSelectionModel(symbols))
-        self.universe_settings.resolution = Resolution.HOUR
+        self.universe_settings.resolution = Resolution.MINUTE
 
         self.symbol_data: Mapping[Symbol, SymbolData] = {}
 
         self.pip = 0.0001  # TODO make this dependend on currency pair, this is not correct for Yen
         self.lot_size = 100000
-        self.set_risk_management(TrailingStopRiskManagementModel(0.05))
+
+        self.add_risk_management(TrailingStopRiskManagementModel(0.1))
         self.set_execution(ImmediateExecutionModel())
 
         self.orders = {}
+
+    def on_hourly_quote_bar(self, sender, quote_bar: QuoteBar):
+        self.symbol_data[quote_bar.symbol].last_hour_quote_bar = quote_bar
 
     def get_quantity(self, quote_bar: QuoteBar) -> Mapping[str, float]:
         def get_maximum_loss(price1: float, price2: float) -> float:
@@ -82,38 +87,34 @@ class OcODevisenStrategy(QCAlgorithm):
 
     def on_data(self, data: Slice):
 
-        if self.time.hour == 8:
+        if self.time.time() == time(8, 0):
             for symbol, symbol_data in self.symbol_data.items():
-                bar = data[symbol]
+                hour_bar = symbol_data.last_hour_quote_bar
 
-                buy_stop_price = bar.high + self.pip * 2
+                buy_stop_price = hour_bar.high + self.pip * 2
                 # entry tickets
                 buy_stop_ticket = self.stop_market_order(
                     symbol=symbol,
-                    quantity=self.get_quantity(bar)["buy"],
+                    quantity=self.get_quantity(hour_bar)["buy"],
                     stop_price=buy_stop_price,
                 )
 
-                sell_stop_price = bar.low - self.pip * 2
+                sell_stop_price = hour_bar.low - self.pip * 2
                 sell_stop_ticket = self.stop_market_order(
-                    symbol, -self.get_quantity(bar)["sell"], sell_stop_price
+                    symbol, -self.get_quantity(hour_bar)["sell"], sell_stop_price
                 )
                 self.register_oco_orders(
                     buy_stop_ticket, sell_stop_ticket
                 )  # TODO test if not cancelling is more profitable
 
                 # stop loss tickets
-                buy_stop_loss_ticket = self.stop_market_order(
-                    symbol,
-                    -self.portfolio[symbol].quantity,
-                    min(bar.low, buy_stop_price - 6 * self.pip),
-                )
-                sell_stop_loss_ticket = self.stop_market_order(
-                    symbol,
-                    -self.portfolio[symbol].quantity,
-                    max(bar.high, sell_stop_price + 6 * self.pip),
-                )
-                self.register_oco_orders(buy_stop_loss_ticket, sell_stop_loss_ticket)
+                # buy_stop_loss_ticket = self.stop_market_order(
+                #     symbol, -self.portfolio[symbol].quantity, min(hour_bar.low, buy_stop_price - 6 * self.pip)
+                # )
+                # sell_stop_loss_ticket = self.stop_market_order(
+                #     symbol, -self.portfolio[symbol].quantity, max(hour_bar.high, sell_stop_price + 6 * self.pip)
+                # )
+                # self.register_oco_orders(buy_stop_loss_ticket, sell_stop_loss_ticket)
 
     def register_oco_orders(self, one_ticket, other_ticket):
         self.orders[one_ticket.order_id] = {
@@ -135,8 +136,14 @@ class OcODevisenStrategy(QCAlgorithm):
         for security in changes.AddedSecurities:
             if security.Symbol not in self.symbol_data:
                 self.symbol_data[security.Symbol] = SymbolData(security.Symbol)
+                consolidator = QuoteBarConsolidator(timedelta(hours=1))
+                self.subscription_manager.add_consolidator(
+                    security.Symbol, consolidator
+                )
+                consolidator.data_consolidated += self.on_hourly_quote_bar
 
         for security in changes.RemovedSecurities:
             symbol_data = self.symbol_data.pop(security.Symbol, None)
+            # TODO remove consolidator
 
         return None
