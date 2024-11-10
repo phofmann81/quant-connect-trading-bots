@@ -26,7 +26,8 @@ class OcODevisenStrategy(QCAlgorithm):
 
         symbols: List[Symbol] = [
             self.add_forex(ticker=currency_pair, resolution=Resolution.MINUTE).symbol
-            for currency_pair in ["EURUSD", "GBPUSD", "EURGBP"]
+            # for currency_pair in ["EURUSD", "GBPUSD", "EURGBP"]
+            for currency_pair in ["EURUSD"]
         ]
 
         self.add_universe_selection(ManualUniverseSelectionModel(symbols))
@@ -37,7 +38,7 @@ class OcODevisenStrategy(QCAlgorithm):
         self.pip = 0.0001  # TODO make this dependend on currency pair, this is not correct for Yen
         self.lot_size = 100000
 
-        self.add_risk_management(TrailingStopRiskManagementModel(0.1))
+        self.add_risk_management(TrailingStopRiskManagementModel(0.002))
         self.set_execution(ImmediateExecutionModel())
 
         self.orders = {}
@@ -128,6 +129,7 @@ class OcODevisenStrategy(QCAlgorithm):
         return None
 
     def on_order_event(self, order_event: OrderEvent):
+        self.log("order event: " + order_event.to_string())
         if order_event.status == OrderStatus.FILLED:
             if (order := self.orders.get(order_event.order_id)) is not None:  # exit
                 self.transactions.cancel_order(order["oco_order_id"])
