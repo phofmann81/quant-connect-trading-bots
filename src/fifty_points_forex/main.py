@@ -2,7 +2,12 @@
 from AlgorithmImports import *
 from symbol_data import SymbolData
 from trailing_stop_risk import TrailingStopRiskManagementModel
+from one_r_trailing_stop_loss_risk_management_model import (
+    OneRTrailingStopRiskManagementModel,
+)
 from immediate_execution_model import ImmediateExecutionModel
+from pytz import timezone
+from day_of_week import DayOfWeek
 
 # endregion
 
@@ -10,14 +15,14 @@ from immediate_execution_model import ImmediateExecutionModel
 class OcODevisenStrategy(QCAlgorithm):
 
     def initialize(self):
-        self.set_start_date(2023, 1, 1)
-        self.set_end_date(2024, 10, 17)
+        self.set_start_date(2022, 1, 3)
+        self.set_end_date(2024, 11, 10)
 
         self.set_cash(100000)
         self.default_order_properties.time_in_force = TimeInForce.DAY
-
-        berlin_time_zone_utc_plus_2 = "Europe/Berlin"
-        self.set_time_zone(berlin_time_zone_utc_plus_2)
+        time_zone_id = "Europe/Berlin"
+        self.berlin_tzinfo = timezone(time_zone_id)
+        self.set_time_zone(time_zone_id)
 
         self.set_brokerage_model(
             brokerage=BrokerageName.INTERACTIVE_BROKERS_BROKERAGE,
@@ -38,7 +43,8 @@ class OcODevisenStrategy(QCAlgorithm):
         self.pip = 0.0001  # TODO make this dependend on currency pair, this is not correct for Yen
         self.lot_size = 100000
 
-        self.add_risk_management(TrailingStopRiskManagementModel(0.002))
+        # self.add_risk_management(TrailingStopRiskManagementModel(0.006))
+        self.add_risk_management(OneRTrailingStopRiskManagementModel(self.pip))
         self.set_execution(ImmediateExecutionModel())
 
         self.orders = {}
@@ -87,35 +93,28 @@ class OcODevisenStrategy(QCAlgorithm):
         return {"buy": buy_size, "sell": sell_size}
 
     def on_data(self, data: Slice):
+        berlin_time = self.Time.astimezone(self.berlin_tzinfo)
 
-        if self.time.time() == time(8, 0):
+        if berlin_time.weekday() == DayOfWeek.FRIDAY:
+            return
+
+        if berlin_time.time() == time(int(self.get_parameter("entry_time")), 0):
             for symbol, symbol_data in self.symbol_data.items():
                 hour_bar = symbol_data.last_hour_quote_bar
 
-                buy_stop_price = hour_bar.high + self.pip * 2
+                buy_stop_price = round(hour_bar.ask.high + self.pip * 2, 6)
                 # entry tickets
                 buy_stop_ticket = self.stop_market_order(
                     symbol=symbol,
-                    quantity=self.get_quantity(hour_bar)["buy"],
+                    quantity=self.get_quantity(hour_bar.ask)["buy"],
                     stop_price=buy_stop_price,
                 )
 
-                sell_stop_price = hour_bar.low - self.pip * 2
+                sell_stop_price = round(hour_bar.bid.low - self.pip * 2, 6)
                 sell_stop_ticket = self.stop_market_order(
-                    symbol, -self.get_quantity(hour_bar)["sell"], sell_stop_price
+                    symbol, -self.get_quantity(hour_bar.bid)["sell"], sell_stop_price
                 )
-                self.register_oco_orders(
-                    buy_stop_ticket, sell_stop_ticket
-                )  # TODO test if not cancelling is more profitable
-
-                # stop loss tickets
-                # buy_stop_loss_ticket = self.stop_market_order(
-                #     symbol, -self.portfolio[symbol].quantity, min(hour_bar.low, buy_stop_price - 6 * self.pip)
-                # )
-                # sell_stop_loss_ticket = self.stop_market_order(
-                #     symbol, -self.portfolio[symbol].quantity, max(hour_bar.high, sell_stop_price + 6 * self.pip)
-                # )
-                # self.register_oco_orders(buy_stop_loss_ticket, sell_stop_loss_ticket)
+                self.register_oco_orders(buy_stop_ticket, sell_stop_ticket)
 
     def register_oco_orders(self, one_ticket, other_ticket):
         self.orders[one_ticket.order_id] = {
