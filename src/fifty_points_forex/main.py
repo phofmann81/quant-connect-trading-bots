@@ -74,7 +74,7 @@ class OcODevisenStrategy(QCAlgorithm):
         position_size = calculate_position_size(
             max_margin,
             risk_exposure,
-            max(quote_bar.high - quote_bar.low, 10 * self.pip),
+            self.get_trailing_stop_distance(quote_bar),
         )
 
         return position_size
@@ -114,14 +114,18 @@ class OcODevisenStrategy(QCAlgorithm):
                 )
                 self.register_oco_orders(buy_stop_ticket, sell_stop_ticket)
 
-                self.risk_management_model.trailing_stop_distance[symbol] = max(
-                    round(
-                        symbol_data.last_hour_quote_bar.high
-                        - symbol_data.last_hour_quote_bar.low,
-                        6,
-                    ),
-                    10 * self.pip,
+                self.risk_management_model.trailing_stop_distance[symbol] = (
+                    self.get_trailing_stop_distance(symbol_data.last_hour_quote_bar)
                 )
+
+    def get_trailing_stop_distance(self, quote_bar: QuoteBar) -> float:
+        max(
+            round(
+                quote_bar.high - quote_bar.low,
+                6,
+            ),
+            10 * self.pip,
+        )
 
     def on_securities_changed(self, changes):
         for security in changes.AddedSecurities:
