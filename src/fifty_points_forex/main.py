@@ -95,22 +95,20 @@ class OcODevisenStrategy(QCAlgorithm):
 
         berlin_time = self.Time.astimezone(self.berlin_tzinfo)
 
-        # if berlin_time.weekday() == DayOfWeek.FRIDAY:
-        #     return
+        if berlin_time.weekday() == DayOfWeek.FRIDAY:
+            return
 
         if berlin_time.time() == time(int(self.get_parameter("entry_time")), 0):
             for symbol, symbol_data in self.symbol_data.items():
 
-                # Calculate indicators
-
-                # # Check for choppy conditions
-                # if (
-                #     symbol_data.atr.Current.Value < 0.0002
-                #     and 45 <= symbol_data.rsi.Current.Value <= 55
-                #     and symbol_data.adx.Current.Value < 20
-                # ):
-                #     # Skip trading due to choppy market conditions
-                #     continue
+                # Check for choppy conditions
+                if (
+                    symbol_data.atr.Current.Value < 0.0002
+                    and 45 <= symbol_data.rsi.Current.Value <= 55
+                    and symbol_data.adx.Current.Value < 20
+                ):
+                    # Skip trading due to choppy market conditions
+                    continue
 
                 hour_bar = symbol_data.last_hour_quote_bar
 
@@ -147,15 +145,15 @@ class OcODevisenStrategy(QCAlgorithm):
                 )
                 consolidator.data_consolidated += self.on_hourly_quote_bar
 
-                # self.symbol_data[security.Symbol].atr = self.ATR(
-                #     security.Symbol, 60, Resolution.MINUTE
-                # )
-                # self.symbol_data[security.Symbol].rsi = self.RSI(
-                #     security.Symbol, 60, MovingAverageType.Wilders, Resolution.Minute
-                # )
-                # self.symbol_data[security.Symbol].adx = self.ADX(
-                #     security.Symbol, 60, Resolution.Minute
-                # )
+                self.symbol_data[security.Symbol].atr = self.ATR(
+                    security.Symbol, 60, Resolution.MINUTE
+                )
+                self.symbol_data[security.Symbol].rsi = self.RSI(
+                    security.Symbol, 60, MovingAverageType.Wilders, Resolution.Minute
+                )
+                self.symbol_data[security.Symbol].adx = self.ADX(
+                    security.Symbol, 60, Resolution.Minute
+                )
 
         for security in changes.RemovedSecurities:
             symbol_data = self.symbol_data.pop(security.Symbol, None)
