@@ -44,7 +44,10 @@ class OneRTrailingStopRiskManagementModel(RiskManagementModel):
             )
 
             # liquidate all open positions at 2pm berlin time
-            if berlin_time == time(14, 00):
+            entry_time = int(algorithm.get_parameter("entry_time")) + 6
+            if entry_time > 24:
+                entry_time = entry_time - 24
+            if berlin_time == time(entry_time, 0):
                 risk_adjusted_targets.append(PortfolioTarget(symbol, 0))
 
         return risk_adjusted_targets

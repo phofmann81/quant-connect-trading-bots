@@ -1,11 +1,9 @@
 # region imports
 from AlgorithmImports import *
 from symbol_data import SymbolData
-from trailing_stop_risk import TrailingStopRiskManagementModel
 from one_r_trailing_stop_loss_risk_management_model import (
     OneRTrailingStopRiskManagementModel,
 )
-from immediate_execution_model import ImmediateExecutionModel
 from pytz import timezone
 from day_of_week import DayOfWeek
 
@@ -32,7 +30,6 @@ class OcODevisenStrategy(QCAlgorithm):
         symbols: List[Symbol] = [
             self.add_forex(ticker=currency_pair, resolution=Resolution.MINUTE).symbol
             for currency_pair in ["EURUSD", "GBPUSD", "EURGBP"]
-            # for currency_pair in ["EURUSD"]
         ]
 
         self.add_universe_selection(ManualUniverseSelectionModel(symbols))
@@ -43,7 +40,6 @@ class OcODevisenStrategy(QCAlgorithm):
         self.pip = 0.0001  # TODO make this dependend on currency pair, this is not correct for Yen
         self.lot_size = 100000
         self.orders = {}
-        # self.add_risk_management(TrailingStopRiskManagementModel(0.006))
         self.risk_management_model = OneRTrailingStopRiskManagementModel()
         self.add_risk_management(self.risk_management_model)
         self.set_execution(ImmediateExecutionModel())
@@ -52,10 +48,6 @@ class OcODevisenStrategy(QCAlgorithm):
         self.symbol_data[quote_bar.symbol].last_hour_quote_bar = quote_bar
 
     def get_quantity(self, quote_bar: QuoteBar) -> Mapping[str, float]:
-        def get_maximum_loss(price1: float, price2: float) -> float:
-            maximum_loss = round(price1 - price2, 6)
-            return maximum_loss if maximum_loss != 0 else 6 * self.pip
-
         def calculate_max_margin() -> float:
             available_margin = self.portfolio.margin_remaining
             invested_count = sum(
@@ -71,25 +63,19 @@ class OcODevisenStrategy(QCAlgorithm):
             max_margin: float, risk_exposure: float, max_loss: float
         ) -> float:
             position_size = risk_exposure / max_loss
-            desired_size = min(position_size, max_margin)
-            return max(round(desired_size / self.lot_size), 1) * self.lot_size
+            return min(position_size, max_margin)
 
         risk_exposure = self.portfolio.total_portfolio_value * 0.01
-
-        # Calculate maximum potential loss for buy and sell
-        maximum_loss_buy = get_maximum_loss(quote_bar.close, quote_bar.low)
-        maximum_loss_sell = get_maximum_loss(quote_bar.high, quote_bar.close)
 
         # Calculate maximum allowable margin for this trade
         max_margin = calculate_max_margin()
 
         # Calculate buy and sell sizes, constrained by max margin
-        buy_size = calculate_position_size(max_margin, risk_exposure, maximum_loss_buy)
-        sell_size = calculate_position_size(
-            max_margin, risk_exposure, maximum_loss_sell
+        position_size = calculate_position_size(
+            max_margin, risk_exposure, quote_bar.high - quote_bar.low
         )
 
-        return {"buy": buy_size, "sell": sell_size}
+        return position_size
 
     def on_data(self, data: Slice):
 
@@ -116,13 +102,13 @@ class OcODevisenStrategy(QCAlgorithm):
                 # entry tickets
                 buy_stop_ticket = self.stop_market_order(
                     symbol=symbol,
-                    quantity=self.get_quantity(hour_bar.ask)["buy"],
+                    quantity=self.get_quantity(hour_bar.ask),
                     stop_price=buy_stop_price,
                 )
 
                 sell_stop_price = round(hour_bar.bid.low - (self.pip * 3), 6)
                 sell_stop_ticket = self.stop_market_order(
-                    symbol, -self.get_quantity(hour_bar.bid)["sell"], sell_stop_price
+                    symbol, -self.get_quantity(hour_bar.bid), sell_stop_price
                 )
                 self.register_oco_orders(buy_stop_ticket, sell_stop_ticket)
 
