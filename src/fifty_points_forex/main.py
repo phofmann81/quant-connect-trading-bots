@@ -114,12 +114,13 @@ class OcODevisenStrategy(QCAlgorithm):
                 )
                 self.register_oco_orders(buy_stop_ticket, sell_stop_ticket)
 
-                self.risk_management_model.trailing_stop_distance[symbol] = (
-                    self.get_trailing_stop_distance(symbol_data.last_hour_quote_bar)
+                self.risk_management_model.set_trailing_stop_distance(
+                    symbol,
+                    self.get_trailing_stop_distance(symbol_data.last_hour_quote_bar),
                 )
 
     def get_trailing_stop_distance(self, quote_bar: QuoteBar) -> float:
-        max(
+        return max(
             round(
                 quote_bar.high - quote_bar.low,
                 6,

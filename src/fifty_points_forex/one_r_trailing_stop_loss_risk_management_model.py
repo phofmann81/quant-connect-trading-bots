@@ -11,6 +11,12 @@ class OneRTrailingStopRiskManagementModel(RiskManagementModel):
         self.berlin_tzinfo = timezone(time_zone_id)
         self.trailing_stop_distance = {}
         self.opposite_order_triggered = {}
+        self.initial_trailing_stop_distance = {}
+
+    def set_trailing_stop_distance(self, symbol, distance):
+        self.trailing_stop_distance[symbol] = self.initial_trailing_stop_distance[
+            symbol
+        ] = distance
 
     def ManageRisk(
         self, algorithm: QCAlgorithm, targets: List[PortfolioTarget]
@@ -26,6 +32,7 @@ class OneRTrailingStopRiskManagementModel(RiskManagementModel):
                 self.highest_profit_price.pop(symbol, None)
                 self.current_trailing_stop.pop(symbol, None)
                 self.opposite_order_triggered.pop(symbol, None)
+
                 continue
 
             holding = security.Holdings
@@ -109,6 +116,9 @@ class OneRTrailingStopRiskManagementModel(RiskManagementModel):
                         PortfolioTarget(symbol, -1 * holding.quantity)
                     )
                     self.opposite_order_triggered[symbol] = True
+                    self.trailing_stop_distance[symbol] = (
+                        self.initial_trailing_stop_distance[symbol]
+                    )
                     algorithm.Debug(
                         f"Opposite order issued for {symbol} at {self.current_trailing_stop[symbol]}"
                     )
