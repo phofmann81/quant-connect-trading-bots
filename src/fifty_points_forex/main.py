@@ -72,7 +72,9 @@ class OcODevisenStrategy(QCAlgorithm):
 
         # Calculate buy and sell sizes, constrained by max margin
         position_size = calculate_position_size(
-            max_margin, risk_exposure, quote_bar.high - quote_bar.low
+            max_margin,
+            risk_exposure,
+            max(quote_bar.high - quote_bar.low, 10 * self.pip),
         )
 
         return position_size
