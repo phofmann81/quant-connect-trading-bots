@@ -15,8 +15,8 @@ from day_of_week import DayOfWeek
 class OcODevisenStrategy(QCAlgorithm):
 
     def initialize(self):
-        self.set_start_date(2022, 1, 3)
-        self.set_end_date(2024, 11, 10)
+        self.set_start_date(2024, 1, 1)
+        self.set_end_date(2024, 11, 11)
 
         self.set_cash(100000)
         self.default_order_properties.time_in_force = TimeInForce.DAY
@@ -31,8 +31,8 @@ class OcODevisenStrategy(QCAlgorithm):
 
         symbols: List[Symbol] = [
             self.add_forex(ticker=currency_pair, resolution=Resolution.MINUTE).symbol
-            # for currency_pair in ["EURUSD", "GBPUSD", "EURGBP"]
-            for currency_pair in ["EURUSD"]
+            for currency_pair in ["EURUSD", "GBPUSD", "EURGBP"]
+            # for currency_pair in ["EURUSD"]
         ]
 
         self.add_universe_selection(ManualUniverseSelectionModel(symbols))
@@ -42,12 +42,11 @@ class OcODevisenStrategy(QCAlgorithm):
 
         self.pip = 0.0001  # TODO make this dependend on currency pair, this is not correct for Yen
         self.lot_size = 100000
-
-        # self.add_risk_management(TrailingStopRiskManagementModel(0.006))
-        self.add_risk_management(OneRTrailingStopRiskManagementModel(self.pip))
-        self.set_execution(ImmediateExecutionModel())
-
         self.orders = {}
+        # self.add_risk_management(TrailingStopRiskManagementModel(0.006))
+        self.risk_management_model = OneRTrailingStopRiskManagementModel()
+        self.add_risk_management(self.risk_management_model)
+        self.set_execution(ImmediateExecutionModel())
 
     def on_hourly_quote_bar(self, sender, quote_bar: QuoteBar):
         self.symbol_data[quote_bar.symbol].last_hour_quote_bar = quote_bar
@@ -93,16 +92,29 @@ class OcODevisenStrategy(QCAlgorithm):
         return {"buy": buy_size, "sell": sell_size}
 
     def on_data(self, data: Slice):
+
         berlin_time = self.Time.astimezone(self.berlin_tzinfo)
 
-        if berlin_time.weekday() == DayOfWeek.FRIDAY:
-            return
+        # if berlin_time.weekday() == DayOfWeek.FRIDAY:
+        #     return
 
         if berlin_time.time() == time(int(self.get_parameter("entry_time")), 0):
             for symbol, symbol_data in self.symbol_data.items():
+
+                # Calculate indicators
+
+                # # Check for choppy conditions
+                # if (
+                #     symbol_data.atr.Current.Value < 0.0002
+                #     and 45 <= symbol_data.rsi.Current.Value <= 55
+                #     and symbol_data.adx.Current.Value < 20
+                # ):
+                #     # Skip trading due to choppy market conditions
+                #     continue
+
                 hour_bar = symbol_data.last_hour_quote_bar
 
-                buy_stop_price = round(hour_bar.ask.high + self.pip * 2, 6)
+                buy_stop_price = round(hour_bar.ask.high + (self.pip * 3), 6)
                 # entry tickets
                 buy_stop_ticket = self.stop_market_order(
                     symbol=symbol,
@@ -110,28 +122,20 @@ class OcODevisenStrategy(QCAlgorithm):
                     stop_price=buy_stop_price,
                 )
 
-                sell_stop_price = round(hour_bar.bid.low - self.pip * 2, 6)
+                sell_stop_price = round(hour_bar.bid.low - (self.pip * 3), 6)
                 sell_stop_ticket = self.stop_market_order(
                     symbol, -self.get_quantity(hour_bar.bid)["sell"], sell_stop_price
                 )
                 self.register_oco_orders(buy_stop_ticket, sell_stop_ticket)
 
-    def register_oco_orders(self, one_ticket, other_ticket):
-        self.orders[one_ticket.order_id] = {
-            "oco_order_id": other_ticket.order_id,
-            "type": "one",
-        }
-        self.orders[other_ticket.order_id] = {
-            "oco_order_id": one_ticket.order_id,
-            "type": "other",
-        }
-        return None
-
-    def on_order_event(self, order_event: OrderEvent):
-        self.log("order event: " + order_event.to_string())
-        if order_event.status == OrderStatus.FILLED:
-            if (order := self.orders.get(order_event.order_id)) is not None:  # exit
-                self.transactions.cancel_order(order["oco_order_id"])
+                self.risk_management_model.trailing_stop_distance[symbol] = max(
+                    round(
+                        symbol_data.last_hour_quote_bar.high
+                        - symbol_data.last_hour_quote_bar.low,
+                        6,
+                    ),
+                    10 * self.pip,
+                )
 
     def on_securities_changed(self, changes):
         for security in changes.AddedSecurities:
@@ -143,8 +147,34 @@ class OcODevisenStrategy(QCAlgorithm):
                 )
                 consolidator.data_consolidated += self.on_hourly_quote_bar
 
+                # self.symbol_data[security.Symbol].atr = self.ATR(
+                #     security.Symbol, 60, Resolution.MINUTE
+                # )
+                # self.symbol_data[security.Symbol].rsi = self.RSI(
+                #     security.Symbol, 60, MovingAverageType.Wilders, Resolution.Minute
+                # )
+                # self.symbol_data[security.Symbol].adx = self.ADX(
+                #     security.Symbol, 60, Resolution.Minute
+                # )
+
         for security in changes.RemovedSecurities:
             symbol_data = self.symbol_data.pop(security.Symbol, None)
             # TODO remove consolidator
 
         return None
+
+    def register_oco_orders(self, one_ticket, other_ticket):
+        self.orders[one_ticket.order_id] = {
+            "oco_order_id": other_ticket.order_id,
+            "type": "one",
+        }
+        self.orders[other_ticket.order_id] = {
+            "oco_order_id": one_ticket.order_id,
+            "type": "other",
+        }
+
+    def on_order_event(self, order_event: OrderEvent):
+        self.log("order event: " + order_event.to_string())
+        if order_event.status == OrderStatus.FILLED:
+            if (order := self.orders.get(order_event.order_id)) is not None:  # exit
+                self.transactions.cancel_order(order["oco_order_id"])

@@ -1,16 +1,16 @@
 from AlgorithmImports import *
 from pytz import timezone
+from operator import sub, add, gt, lt, ge, le
 
 
 class OneRTrailingStopRiskManagementModel(RiskManagementModel):
-    def __init__(self, pip_size: float):
-        self.pip_size = pip_size
-        self.trailing_stop_distance = round(6 * self.pip_size, 6)
+    def __init__(self):
         self.highest_profit_price = {}  # Track highest price reached for each symbol
-        self.initial_stop_price = {}  # Track initial stop loss price for each symbol
         self.current_trailing_stop = {}  # Track current trailing stop for each symbol
         time_zone_id = "Europe/Berlin"
         self.berlin_tzinfo = timezone(time_zone_id)
+        self.trailing_stop_distance = {}
+        self.opposite_order_triggered = {}
 
     def ManageRisk(
         self, algorithm: QCAlgorithm, targets: List[PortfolioTarget]
@@ -24,78 +24,87 @@ class OneRTrailingStopRiskManagementModel(RiskManagementModel):
             if not security.Invested:
                 # Reset tracking when not invested
                 self.highest_profit_price.pop(symbol, None)
-                self.initial_stop_price.pop(symbol, None)
                 self.current_trailing_stop.pop(symbol, None)
+                self.opposite_order_triggered.pop(symbol, None)
                 continue
 
             holding = security.Holdings
-            current_value = holding.absolute_holdings_value / holding.quantity
+            current_value = holding.absolute_holdings_value / abs(holding.quantity)
             berlin_time = algorithm.Time.astimezone(self.berlin_tzinfo).time()
 
-            # Set initial stop loss and take profit if just invested
             if symbol not in self.highest_profit_price:
-                self.highest_profit_price[symbol] = (
-                    holding.absolute_holdings_cost / holding.quantity
-                )
-                self.initial_stop_price[symbol] = (
-                    self.highest_profit_price[symbol] - self.trailing_stop_distance
-                    if holding.IsLong
-                    else self.highest_profit_price[symbol] + self.trailing_stop_distance
-                )
-                self.current_trailing_stop[symbol] = self.initial_stop_price[symbol]
+                self.initialize_holding(symbol, holding)
 
-            # Update the highest profit price based on current price if it's favorable
-            if holding.IsLong:
-                if current_value > self.highest_profit_price[symbol]:
-                    self.highest_profit_price[symbol] = current_value
+            self.update_high_profit_price(holding.IsLong, symbol, current_value)
 
-                # Adjust trailing stop by 1R each time unrealized profits increase by 1R
-                if (
-                    self.current_trailing_stop[symbol]
-                    <= self.highest_profit_price[symbol]
-                    - 2 * self.trailing_stop_distance
-                ):
-                    self.current_trailing_stop[symbol] = (
-                        self.highest_profit_price[symbol] - self.trailing_stop_distance
-                    )
+            self.adjust_trailing_stop(holding.IsLong, symbol, holding, algorithm)
 
-                    algorithm.Debug(
-                        f"Adjusted trailing stop for {symbol} to {self.current_trailing_stop[symbol]}"
-                    )
+            risk_adjusted_targets = self.check_trailing_stop(
+                holding, symbol, current_value, algorithm, risk_adjusted_targets
+            )
 
-                # Check if the trailing stop has been hit
-                if current_value <= self.current_trailing_stop[symbol]:
-                    risk_adjusted_targets.append(PortfolioTarget(symbol, 0))
-                    algorithm.Debug(
-                        f"Trailing stop loss triggered for {symbol} at {self.current_trailing_stop[symbol]}"
-                    )
-
-            else:  # Short position
-                if current_value < self.highest_profit_price[symbol]:
-                    self.highest_profit_price[symbol] = current_value
-
-                # Adjust trailing stop by 1R each time unrealized profits increase by 1R for shorts
-                if (
-                    self.current_trailing_stop[symbol]
-                    >= self.highest_profit_price[symbol]
-                    + 2 * self.trailing_stop_distance
-                ):
-                    self.current_trailing_stop[symbol] = (
-                        self.highest_profit_price[symbol] + self.trailing_stop_distance
-                    )
-                    algorithm.Debug(
-                        f"Adjusted trailing stop for {symbol} to {self.current_trailing_stop[symbol]}"
-                    )
-
-                # Check if the trailing stop has been hit
-                if current_value >= self.current_trailing_stop[symbol]:
-                    risk_adjusted_targets.append(PortfolioTarget(symbol, 0))
-                    algorithm.Debug(
-                        f"Trailing stop loss triggered for {symbol} at {self.current_trailing_stop[symbol]}"
-                    )
-
-                # liquidate all open positions at 2pm berlin time
+            # liquidate all open positions at 2pm berlin time
             if berlin_time == time(14, 00):
                 risk_adjusted_targets.append(PortfolioTarget(symbol, 0))
 
+        return risk_adjusted_targets
+
+    def initialize_holding(self, symbol, holding):
+        op = sub if holding.IsLong else add
+        self.highest_profit_price[symbol] = holding.absolute_holdings_cost / abs(
+            holding.quantity
+        )
+        self.current_trailing_stop[symbol] = op(
+            self.highest_profit_price[symbol], self.trailing_stop_distance[symbol]
+        )
+
+    def update_high_profit_price(self, is_long: bool, symbol, current_value):
+        comp = gt if is_long else lt
+
+        if comp(current_value, self.highest_profit_price[symbol]):
+            self.highest_profit_price[symbol] = current_value
+
+    def adjust_trailing_stop(self, is_long: bool, symbol, holding, algorithm):
+        op = add if is_long else sub
+
+        if (
+            holding.unrealized_profit / abs(holding.quantity)
+            >= 3 * self.trailing_stop_distance[symbol]
+        ):
+
+            self.current_trailing_stop[symbol] = op(
+                self.highest_profit_price[symbol],
+                2 * self.trailing_stop_distance[symbol],
+            )
+
+            algorithm.Debug(
+                f"Adjusted trailing stop for {symbol} to {self.current_trailing_stop[symbol]}"
+            )
+
+    def check_trailing_stop(
+        self,
+        holding,
+        symbol,
+        current_value,
+        algorithm,
+        risk_adjusted_targets: List[PortfolioTarget],
+    ) -> List[PortfolioTarget]:
+        op = le if holding.IsLong else ge
+
+        # Check if the trailing stop has been hit
+        if op(current_value, self.current_trailing_stop[symbol]):
+            algorithm.Debug(
+                f"Trailing stop loss triggered for {symbol} at {self.current_trailing_stop[symbol]}"
+            )
+            if holding.unrealized_profit > 0:
+                risk_adjusted_targets.append(PortfolioTarget(symbol, 0))
+            else:
+                if not symbol in self.opposite_order_triggered:
+                    risk_adjusted_targets.append(
+                        PortfolioTarget(symbol, -1 * holding.quantity)
+                    )
+                    self.opposite_order_triggered[symbol] = True
+                    algorithm.Debug(
+                        f"Opposite order issued for {symbol} at {self.current_trailing_stop[symbol]}"
+                    )
         return risk_adjusted_targets
