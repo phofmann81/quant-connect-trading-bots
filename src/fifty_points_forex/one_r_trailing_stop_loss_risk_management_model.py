@@ -69,12 +69,14 @@ class OneRTrailingStopRiskManagementModel(RiskManagementModel):
 
         if (
             holding.unrealized_profit / abs(holding.quantity)
-            >= 3 * self.trailing_stop_distance[symbol]
+            >= float(algorithm.get_parameter("stop_distance_factor"))
+            * self.trailing_stop_distance[symbol]
         ):
 
             self.current_trailing_stop[symbol] = op(
                 self.highest_profit_price[symbol],
-                2 * self.trailing_stop_distance[symbol],
+                (float(algorithm.get_parameter("stop_distance_factor")) - 1)
+                * self.trailing_stop_distance[symbol],
             )
 
             algorithm.Debug(
