@@ -83,20 +83,20 @@ class OcODevisenStrategy(QCAlgorithm):
 
         berlin_time = self.Time.astimezone(self.berlin_tzinfo)
 
-        if berlin_time.weekday() == DayOfWeek.FRIDAY:
-            return
+        # if berlin_time.weekday() == DayOfWeek.FRIDAY:
+        #     return
 
         if berlin_time.time() == time(int(self.get_parameter("entry_time")), 0):
             for symbol, symbol_data in self.symbol_data.items():
 
-                # Check for choppy conditions
-                if (
-                    symbol_data.atr.Current.Value < 0.0002
-                    and 45 <= symbol_data.rsi.Current.Value <= 55
-                    and symbol_data.adx.Current.Value < 20
-                ):
-                    # Skip trading due to choppy market conditions
-                    continue
+                # # Check for choppy conditions
+                # if (
+                #     symbol_data.atr.Current.Value < 0.0002
+                #     and 45 <= symbol_data.rsi.Current.Value <= 55
+                #     and symbol_data.adx.Current.Value < 20
+                # ):
+                #     # Skip trading due to choppy market conditions
+                #     continue
 
                 hour_bar = symbol_data.last_hour_quote_bar
 
@@ -148,6 +148,16 @@ class OcODevisenStrategy(QCAlgorithm):
                     security.Symbol, 60, Resolution.Minute
                 )
 
+                # charting
+                chart_name = f"Trade Chart {security.Symbol.value}"
+                chart = Chart(chart_name)
+                chart.add_series(CandlestickSeries(name="Price", index=0))
+                chart.add_series(Series("Stop Loss", SeriesType.Line, 0))
+                chart.add_series(Series("Entry", SeriesType.SCATTER, 0))
+                chart.add_series(Series("Exit", SeriesType.SCATTER, 0))
+                self.symbol_data[security.Symbol].chart = chart
+                self.add_chart(chart)
+
         for security in changes.RemovedSecurities:
             symbol_data = self.symbol_data.pop(security.Symbol, None)
             # TODO remove consolidator
@@ -169,3 +179,15 @@ class OcODevisenStrategy(QCAlgorithm):
         if order_event.status == OrderStatus.FILLED:
             if (order := self.orders.get(order_event.order_id)) is not None:  # exit
                 self.transactions.cancel_order(order["oco_order_id"])
+
+    def plot_continuous(self, symbol, price, stop_loss):
+        self.plot(chart=self.symbol_data[symbol].chart, series="Price", value=price)
+        self.plot(
+            chart=self.symbol_data[symbol].chart, series="Stop Loss", value=stop_loss
+        )
+
+    def plot_entry(self, symbol, entry):
+        self.plot(chart=self.symbol_data[symbol].chart, series="Entry", value=entry)
+
+    def plot_exit(self, symbol, exit):
+        self.plot(chart=self.symbol_data[symbol].chart, series="Exit", value=exit)

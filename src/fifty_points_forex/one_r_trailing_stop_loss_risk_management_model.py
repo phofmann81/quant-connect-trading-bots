@@ -12,6 +12,7 @@ class OneRTrailingStopRiskManagementModel(RiskManagementModel):
         self.trailing_stop_distance = {}
         self.opposite_order_triggered = {}
         self.initial_trailing_stop_distance = {}
+        self.crv = {}
 
     def set_trailing_stop_distance(self, symbol, distance):
         self.trailing_stop_distance[symbol] = self.initial_trailing_stop_distance[
@@ -41,7 +42,11 @@ class OneRTrailingStopRiskManagementModel(RiskManagementModel):
 
             if symbol not in self.highest_profit_price:
                 self.initialize_holding(symbol, holding)
+                algorithm.plot_entry(symbol, current_value)
 
+            algorithm.plot_continuous(
+                symbol, current_value, self.current_trailing_stop[symbol]
+            )
             self.update_high_profit_price(holding.IsLong, symbol, current_value)
 
             self.adjust_trailing_stop(holding.IsLong, symbol, holding, algorithm)
@@ -50,11 +55,13 @@ class OneRTrailingStopRiskManagementModel(RiskManagementModel):
                 holding, symbol, current_value, algorithm, risk_adjusted_targets
             )
 
+            # risk_adjusted_targets = self.take_profit(symbol, holding, risk_adjusted_targets)
+
             # liquidate all open positions at 2pm berlin time
-            entry_time = int(algorithm.get_parameter("entry_time")) + 6
-            if entry_time > 24:
-                entry_time = entry_time - 24
-            if berlin_time == time(entry_time, 0):
+            exit_time = int(algorithm.get_parameter("entry_time")) + 6
+            if exit_time > 24:
+                exit_time -= 24
+            if berlin_time == time(exit_time, 0):
                 risk_adjusted_targets.append(PortfolioTarget(symbol, 0))
 
         return risk_adjusted_targets
@@ -105,11 +112,11 @@ class OneRTrailingStopRiskManagementModel(RiskManagementModel):
 
         # Check if the trailing stop has been hit
         if op(current_value, self.current_trailing_stop[symbol]):
-            algorithm.Debug(
-                f"Trailing stop loss triggered for {symbol} at {self.current_trailing_stop[symbol]}"
-            )
+            algorithm.plot_exit(symbol, current_value)
+
             if holding.unrealized_profit > 0:
                 risk_adjusted_targets.append(PortfolioTarget(symbol, 0))
+
             else:
                 if not symbol in self.opposite_order_triggered:
                     risk_adjusted_targets.append(
@@ -119,7 +126,8 @@ class OneRTrailingStopRiskManagementModel(RiskManagementModel):
                     self.trailing_stop_distance[symbol] = (
                         self.initial_trailing_stop_distance[symbol]
                     )
-                    algorithm.Debug(
-                        f"Opposite order issued for {symbol} at {self.current_trailing_stop[symbol]}"
+                    self.current_trailing_stop[symbol] = (
+                        current_value + self.trailing_stop_distance[symbol]
                     )
+
         return risk_adjusted_targets
