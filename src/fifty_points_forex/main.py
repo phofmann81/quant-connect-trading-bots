@@ -13,8 +13,8 @@ from day_of_week import DayOfWeek
 class OcODevisenStrategy(QCAlgorithm):
 
     def initialize(self):
-        self.set_start_date(2024, 1, 1)
-        self.set_end_date(2024, 11, 11)
+        self.set_start_date(2024, 9, 13)
+        self.set_end_date(2024, 11, 13)
 
         self.set_cash(100000)
         self.default_order_properties.time_in_force = TimeInForce.DAY
@@ -29,6 +29,7 @@ class OcODevisenStrategy(QCAlgorithm):
 
         symbols: List[Symbol] = [
             self.add_forex(ticker=currency_pair, resolution=Resolution.MINUTE).symbol
+            # for currency_pair in ["GBPUSD",]
             for currency_pair in ["EURUSD", "GBPUSD", "EURGBP"]
         ]
 
@@ -40,7 +41,7 @@ class OcODevisenStrategy(QCAlgorithm):
         self.pip = 0.0001  # TODO make this dependend on currency pair, this is not correct for Yen
         self.lot_size = 100000
         self.orders = {}
-        self.risk_management_model = OneRTrailingStopRiskManagementModel()
+        self.risk_management_model = OneRTrailingStopRiskManagementModel(self)
         self.add_risk_management(self.risk_management_model)
         self.set_execution(ImmediateExecutionModel())
 
@@ -63,7 +64,7 @@ class OcODevisenStrategy(QCAlgorithm):
             max_margin: float, risk_exposure: float, max_loss: float
         ) -> float:
             position_size = risk_exposure / max_loss
-            return min(position_size, max_margin)
+            return min(position_size, max_margin, 20000)
 
         risk_exposure = self.portfolio.total_portfolio_value * 0.01
 
@@ -81,13 +82,12 @@ class OcODevisenStrategy(QCAlgorithm):
 
     def on_data(self, data: Slice):
 
-        berlin_time = self.Time.astimezone(self.berlin_tzinfo)
-
-        # if berlin_time.weekday() == DayOfWeek.FRIDAY:
+        # if self.time.weekday() == DayOfWeek.FRIDAY:
         #     return
+        for symbol, symbol_data in self.symbol_data.items():
+            hour_bar = symbol_data.last_hour_quote_bar
 
-        if berlin_time.time() == time(int(self.get_parameter("entry_time")), 0):
-            for symbol, symbol_data in self.symbol_data.items():
+            if self.time.time() == time(int(self.get_parameter("entry_time")), 0):
 
                 # # Check for choppy conditions
                 # if (
@@ -98,8 +98,6 @@ class OcODevisenStrategy(QCAlgorithm):
                 #     # Skip trading due to choppy market conditions
                 #     continue
 
-                hour_bar = symbol_data.last_hour_quote_bar
-
                 buy_stop_price = round(hour_bar.ask.high + (self.pip * 3), 6)
                 # entry tickets
                 buy_stop_ticket = self.stop_market_order(
@@ -107,7 +105,11 @@ class OcODevisenStrategy(QCAlgorithm):
                     quantity=self.get_quantity(hour_bar.ask),
                     stop_price=buy_stop_price,
                 )
-
+                self.log(
+                    self.market_hours_database.get_data_time_zone(
+                        Market.Oanda, symbol, SecurityType.Forex
+                    )
+                )
                 sell_stop_price = round(hour_bar.bid.low - (self.pip * 3), 6)
                 sell_stop_ticket = self.stop_market_order(
                     symbol, -self.get_quantity(hour_bar.bid), sell_stop_price
@@ -119,13 +121,16 @@ class OcODevisenStrategy(QCAlgorithm):
                     self.get_trailing_stop_distance(symbol_data.last_hour_quote_bar),
                 )
 
+            if symbol in data.quote_bars and self.portfolio[symbol].invested:
+                self.plot_price(symbol, data.quote_bars[symbol])
+
     def get_trailing_stop_distance(self, quote_bar: QuoteBar) -> float:
         return max(
             round(
                 quote_bar.high - quote_bar.low,
                 6,
             ),
-            10 * self.pip,
+            8 * self.pip,
         )
 
     def on_securities_changed(self, changes):
@@ -153,8 +158,24 @@ class OcODevisenStrategy(QCAlgorithm):
                 chart = Chart(chart_name)
                 chart.add_series(CandlestickSeries(name="Price", index=0))
                 chart.add_series(Series("Stop Loss", SeriesType.Line, 0))
-                chart.add_series(Series("Entry", SeriesType.SCATTER, 0))
-                chart.add_series(Series("Exit", SeriesType.SCATTER, 0))
+                chart.add_series(
+                    Series(
+                        name="Entry",
+                        type=SeriesType.SCATTER,
+                        unit="$",
+                        color=Color.GREEN,
+                        symbol=ScatterMarkerSymbol.TRIANGLE,
+                    )
+                )
+                chart.add_series(
+                    Series(
+                        name="Exit",
+                        type=SeriesType.SCATTER,
+                        unit="$",
+                        color=Color.RED,
+                        symbol=ScatterMarkerSymbol.TRIANGLE_DOWN,
+                    )
+                )
                 self.symbol_data[security.Symbol].chart = chart
                 self.add_chart(chart)
 
@@ -180,14 +201,30 @@ class OcODevisenStrategy(QCAlgorithm):
             if (order := self.orders.get(order_event.order_id)) is not None:  # exit
                 self.transactions.cancel_order(order["oco_order_id"])
 
-    def plot_continuous(self, symbol, price, stop_loss):
-        self.plot(chart=self.symbol_data[symbol].chart, series="Price", value=price)
+    def plot_price(self, symbol, quote_bar):
         self.plot(
-            chart=self.symbol_data[symbol].chart, series="Stop Loss", value=stop_loss
+            chart=self.symbol_data[symbol].chart.name,
+            series="Price",
+            open=quote_bar.open,
+            high=quote_bar.high,
+            low=quote_bar.low,
+            close=quote_bar.close,
         )
 
-    def plot_entry(self, symbol, entry):
-        self.plot(chart=self.symbol_data[symbol].chart, series="Entry", value=entry)
+    def plot_entry(self, symbol, entry_point):
+        self.log("in plot entry")
+        self.plot(
+            chart=self.symbol_data[symbol].chart.name, series="Entry", value=entry_point
+        )
 
-    def plot_exit(self, symbol, exit):
-        self.plot(chart=self.symbol_data[symbol].chart, series="Exit", value=exit)
+    def plot_exit(self, symbol, exit_point):
+        self.plot(
+            chart=self.symbol_data[symbol].chart.name, series="Exit", value=exit_point
+        )
+
+    def plot_stop_loss(self, symbol, stop_loss):
+        self.plot(
+            chart=self.symbol_data[symbol].chart.name,
+            series="Stop Loss",
+            value=stop_loss,
+        )
