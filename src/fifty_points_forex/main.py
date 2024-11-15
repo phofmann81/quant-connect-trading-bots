@@ -6,6 +6,7 @@ from one_r_trailing_stop_loss_risk_management_model import (
 )
 from pytz import timezone
 from day_of_week import DayOfWeek
+from operator import gt, lt
 
 # endregion
 
@@ -85,12 +86,18 @@ class OcODevisenStrategy(QCAlgorithm):
     def on_data(self, data: Slice):
 
         for symbol, symbol_data in self.symbol_data.items():
+            symbol_data.window.add(data.quote_bars[symbol])
+
             if hour_bar := symbol_data.last_hour_quote_bar:
 
                 if direction := self.ema_50_cross_ema_200(
                     symbol_data.ema_50, symbol_data.ema_200
                 ):
-                    if self.check_trend_stregth(direction, symbol_data.rsi):
+                    if self.window_confirms_breakout(
+                        direction, symbol_data.window, symbol_data.ema_200
+                    ):
+
+                        # if self.check_trend_stregth(direction, symbol_data.rsi, symbol_data.rdv):
                         # entry tickets
                         if not self.portfolio[symbol].invested:
                             self.market_order(
@@ -108,6 +115,11 @@ class OcODevisenStrategy(QCAlgorithm):
 
             if symbol in data.quote_bars and self.portfolio[symbol].invested:
                 self.plot_price(symbol, data.quote_bars[symbol])
+
+    def window_confirms_breakout(self, direction, window, ema_200):
+        op = gt if direction == 1 else lt
+        l = list(window)[::-1]
+        return all(op(x.price, y.price) for x, y in zip(l, l[1:]))
 
     def check_trend_stregth(self, direction, rsi):
         if not rsi.is_ready:
@@ -171,11 +183,12 @@ class OcODevisenStrategy(QCAlgorithm):
                     security.Symbol, 60, Resolution.Minute
                 )
                 self.symbol_data[security.Symbol].ema_50 = self.EMA(
-                    security.Symbol, 50, Resolution.HOUR
+                    security.Symbol, 50, Resolution.Minute
                 )
                 self.symbol_data[security.Symbol].ema_200 = self.EMA(
-                    security.Symbol, 200, Resolution.HOUR
+                    security.Symbol, 200, Resolution.Minute
                 )
+                self.symbol_data[security.Symbol].window = RollingWindow[QuoteBar](5)
 
                 # charting
                 chart_name = f"Trade Chart {security.Symbol.value}"
