@@ -82,21 +82,9 @@ class OcODevisenStrategy(QCAlgorithm):
 
     def on_data(self, data: Slice):
 
-        # if self.time.weekday() == DayOfWeek.FRIDAY:
-        #     return
-        for symbol, symbol_data in self.symbol_data.items():
-            hour_bar = symbol_data.last_hour_quote_bar
-
-            if self.time.time() == time(int(self.get_parameter("entry_time")), 0):
-
-                # # Check for choppy conditions
-                # if (
-                #     symbol_data.atr.Current.Value < 0.0002
-                #     and 45 <= symbol_data.rsi.Current.Value <= 55
-                #     and symbol_data.adx.Current.Value < 20
-                # ):
-                #     # Skip trading due to choppy market conditions
-                #     continue
+        if self.time.time() == time(int(self.get_parameter("entry_time")), 0):
+            for symbol, symbol_data in self.symbol_data.items():
+                hour_bar = symbol_data.last_hour_quote_bar
 
                 buy_stop_price = round(hour_bar.ask.high + (self.pip * 3), 6)
                 # entry tickets
@@ -104,11 +92,6 @@ class OcODevisenStrategy(QCAlgorithm):
                     symbol=symbol,
                     quantity=self.get_quantity(hour_bar.ask),
                     stop_price=buy_stop_price,
-                )
-                self.log(
-                    self.market_hours_database.get_data_time_zone(
-                        Market.Oanda, symbol, SecurityType.Forex
-                    )
                 )
                 sell_stop_price = round(hour_bar.bid.low - (self.pip * 3), 6)
                 sell_stop_ticket = self.stop_market_order(
@@ -181,7 +164,7 @@ class OcODevisenStrategy(QCAlgorithm):
 
         for security in changes.RemovedSecurities:
             symbol_data = self.symbol_data.pop(security.Symbol, None)
-            # TODO remove consolidator
+            # TODO remove all the things
 
         return None
 
