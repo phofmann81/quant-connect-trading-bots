@@ -13,8 +13,8 @@ from day_of_week import DayOfWeek
 class OcODevisenStrategy(QCAlgorithm):
 
     def initialize(self):
-        self.set_start_date(2024, 9, 13)
-        self.set_end_date(2024, 11, 13)
+        self.set_start_date(2024, 1, 1)
+        self.set_end_date(2024, 11, 14)
 
         self.set_cash(100000)
         self.default_order_properties.time_in_force = TimeInForce.DAY
@@ -41,7 +41,7 @@ class OcODevisenStrategy(QCAlgorithm):
         self.pip = 0.0001  # TODO make this dependend on currency pair, this is not correct for Yen
         self.lot_size = 100000
         self.orders = {}
-        self.risk_management_model = OneRTrailingStopRiskManagementModel(self)
+        self.risk_management_model = TrailingStopRiskManagementModel(0.002)
         self.add_risk_management(self.risk_management_model)
         self.set_execution(ImmediateExecutionModel())
 
@@ -82,30 +82,62 @@ class OcODevisenStrategy(QCAlgorithm):
 
     def on_data(self, data: Slice):
 
-        if self.time.time() == time(int(self.get_parameter("entry_time")), 0):
-            for symbol, symbol_data in self.symbol_data.items():
-                hour_bar = symbol_data.last_hour_quote_bar
+        for symbol, symbol_data in self.symbol_data.items():
+            if hour_bar := symbol_data.last_hour_quote_bar:
 
-                buy_stop_price = round(hour_bar.ask.high + (self.pip * 3), 6)
-                # entry tickets
-                buy_stop_ticket = self.stop_market_order(
-                    symbol=symbol,
-                    quantity=self.get_quantity(hour_bar.ask),
-                    stop_price=buy_stop_price,
-                )
-                sell_stop_price = round(hour_bar.bid.low - (self.pip * 3), 6)
-                sell_stop_ticket = self.stop_market_order(
-                    symbol, -self.get_quantity(hour_bar.bid), sell_stop_price
-                )
-                self.register_oco_orders(buy_stop_ticket, sell_stop_ticket)
+                if direction := self.ema_50_cross_ema_200(
+                    symbol_data.ema_50, symbol_data.ema_200
+                ):
+                    if self.check_trend_stregth(direction, symbol_data.rsi):
+                        # entry tickets
+                        if not self.portfolio[symbol].invested:
+                            self.market_order(
+                                symbol=symbol,
+                                quantity=direction * self.get_quantity(hour_bar.ask),
+                            )
 
-                self.risk_management_model.set_trailing_stop_distance(
-                    symbol,
-                    self.get_trailing_stop_distance(symbol_data.last_hour_quote_bar),
-                )
+                    # self.risk_management_model.set_trailing_stop_distance(
+                    #     symbol,
+                    #     self.get_trailing_stop_distance(
+                    #         symbol_data.last_hour_quote_bar
+                    #     ),  # TODO check trailing stop logic
+                    # )
 
             if symbol in data.quote_bars and self.portfolio[symbol].invested:
                 self.plot_price(symbol, data.quote_bars[symbol])
+
+    def check_trend_stregth(self, direction, rsi):
+        if not rsi.is_ready:
+            return False
+
+        is_long = True if direction == 1 else False
+
+        trend_strong = rsi.current.value > 50 if is_long else rsi.current.value < 50
+        return trend_strong
+
+    def ema_50_cross_ema_200(self, ema_50, ema_200):
+
+        if (
+            not ema_50.is_ready
+            or ema_50.previous.value == 0.0
+            or not ema_200.is_ready
+            or ema_200.previous.value == 0.0
+        ):
+            return False
+
+        if (
+            ema_50.current.value > ema_200.current.value
+            and ema_50.previous.value <= ema_200.previous.value
+        ):
+            return 1  # long
+
+        if (
+            ema_50.current.value < ema_200.current.value
+            and ema_50.previous.value >= ema_200.previous.value
+        ):
+            return -1  # short
+
+        return False
 
     def get_trailing_stop_distance(self, quote_bar: QuoteBar) -> float:
         return max(
@@ -130,10 +162,16 @@ class OcODevisenStrategy(QCAlgorithm):
                     security.Symbol, 60, Resolution.MINUTE
                 )
                 self.symbol_data[security.Symbol].rsi = self.RSI(
-                    security.Symbol, 60, MovingAverageType.Wilders, Resolution.Minute
+                    security.Symbol, 24, MovingAverageType.Wilders, Resolution.HOUR
                 )
                 self.symbol_data[security.Symbol].adx = self.ADX(
                     security.Symbol, 60, Resolution.Minute
+                )
+                self.symbol_data[security.Symbol].ema_50 = self.EMA(
+                    security.Symbol, 50, Resolution.HOUR
+                )
+                self.symbol_data[security.Symbol].ema_200 = self.EMA(
+                    security.Symbol, 200, Resolution.HOUR
                 )
 
                 # charting
