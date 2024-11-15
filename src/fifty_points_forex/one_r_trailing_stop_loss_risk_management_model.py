@@ -54,10 +54,6 @@ class OneRTrailingStopRiskManagementModel(RiskManagementModel):
                 holding, symbol, current_value, algorithm, risk_adjusted_targets
             )
 
-            # liquidate all open positions at 2pm berlin time
-            # exit_time = int(algorithm.get_parameter("entry_time")) + 6
-            # if exit_time > 24:
-            #     exit_time -= 24
             if berlin_time == time(22, 0):
                 risk_adjusted_targets.append(PortfolioTarget(symbol, 0))
 
@@ -105,10 +101,6 @@ class OneRTrailingStopRiskManagementModel(RiskManagementModel):
                 * self.trailing_stop_distance[symbol],
             )
 
-            # algorithm.Debug(
-            #     f"Adjusted trailing stop for {symbol} to {self.current_trailing_stop[symbol]}"
-            # )
-
     def check_trailing_stop(
         self,
         holding,
@@ -118,6 +110,7 @@ class OneRTrailingStopRiskManagementModel(RiskManagementModel):
         risk_adjusted_targets: List[PortfolioTarget],
     ) -> List[PortfolioTarget]:
         op = le if holding.IsLong else ge
+        add_or_sub = add if holding.IsLong else sub  # previous holding before reversal
 
         # Check if the trailing stop has been hit
         if op(current_value, self.current_trailing_stop[symbol]):
@@ -134,8 +127,8 @@ class OneRTrailingStopRiskManagementModel(RiskManagementModel):
                 self.trailing_stop_distance[symbol] = (
                     self.initial_trailing_stop_distance[symbol]
                 )
-                self.current_trailing_stop[symbol] = (
-                    current_value + self.trailing_stop_distance[symbol]
+                self.current_trailing_stop[symbol] = add_or_sub(
+                    current_value, self.trailing_stop_distance[symbol]
                 )
             else:
                 risk_adjusted_targets.append(PortfolioTarget(symbol, 0))
