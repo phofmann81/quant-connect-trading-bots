@@ -84,18 +84,17 @@ class OcODevisenStrategy(QCAlgorithm):
         return position_size
 
     def on_data(self, data: Slice):
+        if time(14, 0) > self.time.time() >= time(8, 0):
+            for symbol, symbol_data in self.symbol_data.items():
+                symbol_data.window.add(data.quote_bars[symbol])
 
-        for symbol, symbol_data in self.symbol_data.items():
-            symbol_data.window.add(data.quote_bars[symbol])
+                if hour_bar := symbol_data.last_hour_quote_bar:
 
-            if hour_bar := symbol_data.last_hour_quote_bar:
-
-                if direction := self.ema_50_cross_ema_200(
-                    symbol_data.ema_50, symbol_data.ema_200
-                ):
-                    if self.window_confirms_breakout(
-                        direction, symbol_data.window, symbol_data.ema_200
+                    if direction := self.ema_50_cross_ema_200(
+                        symbol_data.ema_50, symbol_data.ema_200
                     ):
+                        # if self.window_confirms_breakout(direction, symbol_data.window):
+                        #     self.log("window confirmed")
 
                         # if self.check_trend_stregth(direction, symbol_data.rsi, symbol_data.rdv):
                         # entry tickets
@@ -106,17 +105,17 @@ class OcODevisenStrategy(QCAlgorithm):
                                 tag="entry",
                             )
 
-                    # self.risk_management_model.set_trailing_stop_distance(
-                    #     symbol,
-                    #     self.get_trailing_stop_distance(
-                    #         symbol_data.last_hour_quote_bar
-                    #     ),  # TODO check trailing stop logic
-                    # )
+                        # self.risk_management_model.set_trailing_stop_distance(
+                        #     symbol,
+                        #     self.get_trailing_stop_distance(
+                        #         symbol_data.last_hour_quote_bar
+                        #     ),  # TODO check trailing stop logic
+                        # )
 
-            if symbol in data.quote_bars and self.portfolio[symbol].invested:
-                self.plot_price(symbol, data.quote_bars[symbol])
+                # if symbol in data.quote_bars and self.portfolio[symbol].invested:
+                #     self.plot_price(symbol, data.quote_bars[symbol])
 
-    def window_confirms_breakout(self, direction, window, ema_200):
+    def window_confirms_breakout(self, direction, window):
         op = gt if direction == 1 else lt
         l = list(window)[::-1]
         return all(op(x.price, y.price) for x, y in zip(l, l[1:]))
@@ -183,12 +182,14 @@ class OcODevisenStrategy(QCAlgorithm):
                     security.Symbol, 60, Resolution.Minute
                 )
                 self.symbol_data[security.Symbol].ema_50 = self.EMA(
-                    security.Symbol, 50, Resolution.Minute
+                    security.Symbol, 50, Resolution.Hour
                 )
                 self.symbol_data[security.Symbol].ema_200 = self.EMA(
-                    security.Symbol, 200, Resolution.Minute
+                    security.Symbol, 200, Resolution.Hour
                 )
-                self.symbol_data[security.Symbol].window = RollingWindow[QuoteBar](5)
+                self.symbol_data[security.Symbol].window = RollingWindow[QuoteBar](
+                    int(self.get_parameter("window_size"))
+                )
 
                 # charting
                 chart_name = f"Trade Chart {security.Symbol.value}"
