@@ -41,7 +41,9 @@ class OcODevisenStrategy(QCAlgorithm):
         self.pip = 0.0001  # TODO make this dependend on currency pair, this is not correct for Yen
         self.lot_size = 100000
         self.orders = {}
-        self.risk_management_model = TrailingStopRiskManagementModel(0.002)
+        self.risk_management_model = TrailingStopRiskManagementModel(
+            float(self.get_parameter("percent_stop"))
+        )
         self.add_risk_management(self.risk_management_model)
         self.set_execution(ImmediateExecutionModel())
 
@@ -94,6 +96,7 @@ class OcODevisenStrategy(QCAlgorithm):
                             self.market_order(
                                 symbol=symbol,
                                 quantity=direction * self.get_quantity(hour_bar.ask),
+                                tag="entry",
                             )
 
                     # self.risk_management_model.set_trailing_stop_distance(
