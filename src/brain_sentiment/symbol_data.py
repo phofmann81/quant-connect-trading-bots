@@ -13,7 +13,7 @@ class SymbolData:
 
         # Requesting the processed longer term (30-day) sentiment score data for sentiment trading
         self.dataset_symbol = algorithm.add_data(
-            BrainSentimentIndicator30Day, symbol
+            BrainSentimentIndicator7Day, symbol
         ).symbol
 
         self.target_direction = InsightDirection.FLAT
@@ -39,8 +39,14 @@ class SymbolData:
     def update(self, sentiment: float) -> None:
         # Comparing the last sentiment score and decide to buy if the sentiment increases to ride the popularity
         if self._latest_sentiment_value is not None:
-            if sentiment > self._latest_sentiment_value:
+            if sentiment > 0 and sentiment > self._latest_sentiment_value:
                 self.target_direction = InsightDirection.UP
             else:
                 self.target_direction = InsightDirection.FLAT
+
+            if sentiment < 0 and sentiment < self._latest_sentiment_value:
+                self.target_direction = InsightDirection.DOWN
+            else:
+                self.target_direction = InsightDirection.FLAT
+
         self._latest_sentiment_value = sentiment

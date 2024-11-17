@@ -19,8 +19,8 @@ class DeterminedOrangeSalmon(QCAlgorithm):
     def initialize(self):
         self.set_start_date(2024, 1, 1)
         self.set_cash(100000)
-
-        self.universe_settings.resolution = Resolution.DAILY
+        self.set_time_zone("Europe/Berlin")
+        self.universe_settings.resolution = Resolution.HOUR
         fundamental_universe_selection = FundamentalUniverseSelectionModel()
         self.add_universe_selection(fundamental_universe_selection)
         sentiment_universe_selection = BrainSentimentUniverseSelectionModel(
@@ -35,13 +35,3 @@ class DeterminedOrangeSalmon(QCAlgorithm):
         self.set_portfolio_construction(EqualWeightingPortfolioConstructionModel())
         self.add_risk_management(TrailingStopRiskManagementModel(0.05))
         self.set_execution(ImmediateExecutionModel())
-
-    def on_securities_changed(self, changes):
-        for added in changes.added_securities:
-            self.add_data(BrainSentimentIndicator7Day, added.symbol)
-
-    def on_data(self, data):
-        for dataset_symbol, data_point in data.get(BrainSentimentIndicator7Day).items():
-            self.debug(
-                f"{dataset_symbol} sentiment at {data.time}: {data_point.sentiment}"
-            )

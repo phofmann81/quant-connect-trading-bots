@@ -1,5 +1,6 @@
 # region imports
 from AlgorithmImports import *
+from heapq import nlargest
 
 
 class BrainSentimentUniverseSelectionModel:
@@ -23,15 +24,22 @@ class BrainSentimentUniverseSelectionModel:
             self.fundamental_universe_ref.fundamental_symbols
         )
 
-        # Filter intersected data
-        intersected_buzz_data = [d for d in data_with_buzz if d.symbol in intersection]
+        # Prepare heaps for top positive and negative sentiments
+        top_positive = []
+        top_negative = []
 
-        # Sort by sentiment and select the top 25
-        top_25_buzz = sorted(
-            intersected_buzz_data,
-            key=lambda d: d.sentimental_buzz_volume_7_days,
-            reverse=True,
-        )[:25]
+        for d in data_with_buzz:
+            if d.symbol in intersection:
+                if d.sentiment_7_days > 0:
+                    top_positive.append((d.sentimental_buzz_volume_7_days, d))
+                elif d.sentiment_7_days < 0:
+                    top_negative.append((d.sentimental_buzz_volume_7_days, d))
 
-        # Return the selected symbols
-        return [d.symbol for d in top_25_buzz]
+        # Select top 25 from each category
+        top_25_positive = nlargest(25, top_positive, key=lambda x: x[0])
+        top_25_negative = nlargest(25, top_negative, key=lambda x: x[0])
+
+        # Extract symbols from the top selections
+        selected_symbols = [d.symbol for _, d in top_25_positive + top_25_negative]
+
+        return selected_symbols
