@@ -14,7 +14,7 @@ class FundamentalUniverseSelectionModel(UniverseSelectionModel):
             sorted_by_dollar_volume = sorted(
                 fundamental, key=lambda x: x.dollar_volume, reverse=True
             )
-            self.fundamental_symbols = [c.symbol for c in sorted_by_dollar_volume[:100]]
+            self.fundamental_symbols = [c.symbol for c in sorted_by_dollar_volume[:500]]
             return Universe.UNCHANGED
 
         return [

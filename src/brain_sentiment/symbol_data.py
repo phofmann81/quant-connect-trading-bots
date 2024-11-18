@@ -10,20 +10,19 @@ class SymbolData:
 
     def __init__(self, algorithm: QCAlgorithm, symbol: Symbol) -> None:
         self.algorithm = algorithm
-
-        # Requesting the processed longer term (30-day) sentiment score data for sentiment trading
+        # Requesting the processed shorter term (7-day) sentiment score data for sentiment trading
         self.dataset_symbol = algorithm.add_data(
             BrainSentimentIndicator7Day, symbol
         ).symbol
-
+        self.ema_50 = algorithm.EMA(symbol=symbol, period=50)
+        self.ema_200 = algorithm.EMA(symbol=symbol, period=200)
+        self.bar_window = RollingWindow[TradeBar](3)
         self.target_direction = InsightDirection.FLAT
         self._latest_sentiment_value = None
 
         # Historical data
         history = algorithm.history(self.dataset_symbol, 100, Resolution.DAILY)
-        algorithm.debug(
-            f"We got {len(history)} items from our history request for {self.dataset_symbol}"
-        )
+        # algorithm.debug(f"We got {len(history)} items from our history request for {self.dataset_symbol}")
         if history.empty:
             return
 
@@ -32,9 +31,11 @@ class SymbolData:
         for sentiment in previous_sentiment_values:
             self.update(sentiment)
 
-    def dispose(self) -> None:
+    def dispose(self, symbol) -> None:
         # Unsubscribe from the Brain Sentiment feed for this security to release computational resources
         self.algorithm.remove_security(self.dataset_symbol)
+        # also unsubscribe the symbol from the algorithm
+        self.algorithm.remove_security(symbol)
 
     def update(self, sentiment: float) -> None:
         # Comparing the last sentiment score and decide to buy if the sentiment increases to ride the popularity
@@ -50,3 +51,6 @@ class SymbolData:
                 self.target_direction = InsightDirection.FLAT
 
         self._latest_sentiment_value = sentiment
+
+    def update_bar(self, bar):
+        self.bar_window.add(bar)
