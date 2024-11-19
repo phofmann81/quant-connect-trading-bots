@@ -13,15 +13,13 @@ class BrainSentimentAlphaModel(AlphaModel):
     symbol_data_by_symbol = {}
     symbols_with_news = []
 
-    def update(self, algorithm: QCAlgorithm, slice: Slice) -> List[Insight]:
-        insights = []
-
+    def update_bars(self, bars: Dict[Symbol, TradeBar]):
         for symbol, symbol_data in self.symbol_data_by_symbol.items():
-            if not slice.bars.get(symbol):
-                continue
+            if symbol in bars:
+                symbol_data.update_bar(bars[symbol])
 
-            symbol_data.update_bar(slice.bars[symbol])
-            # Update trade direction based on updated data
+    def update_symbols_with_news(self, slice, algorithm):
+        for symbol, symbol_data in self.symbol_data_by_symbol.items():
             if (
                 slice.contains_key(symbol_data.dataset_symbol)
                 and slice[symbol_data.dataset_symbol] is not None
@@ -29,8 +27,7 @@ class BrainSentimentAlphaModel(AlphaModel):
 
                 sentiment_data = slice[symbol_data.dataset_symbol]
                 sentiment = sentiment_data.sentiment
-                symbol_data.update(sentiment)
-
+                # symbol_data.update(sentiment)
                 if (
                     abs(sentiment) > 0.4
                     and sentiment_data.sentimental_article_mentions > 30
@@ -38,47 +35,63 @@ class BrainSentimentAlphaModel(AlphaModel):
                     algorithm.debug(f"symbol {symbol.value}: sentiment: {sentiment}")
                     self.symbols_with_news.append(symbol)
 
-            # Issue orders at 9pm
+    def generate_insights(self, slice, insights: List[Insight]) -> List[Insight]:
+        for symbol in self.symbols_with_news:
+            symbol_data = self.symbol_data_by_symbol[symbol]
+            if (
+                slice.bars[symbol].close > symbol_data.ema_50.current.value
+                and slice.bars[symbol].close > symbol_data.ema_200.current.value
+                and self.check_previous_bar(symbol_data.bar_window, True)
+            ):
+                insights.append(
+                    Insight.price(
+                        symbol, timedelta(hours=1), direction=InsightDirection.UP
+                    )
+                )
+            elif (
+                slice.bars[symbol].close < symbol_data.ema_50.current.value
+                and slice.bars[symbol].close < symbol_data.ema_200.current.value
+                and self.check_previous_bar(symbol_data.bar_window, False)
+            ):
+                insights.append(
+                    Insight.price(
+                        symbol, timedelta(hours=1), direction=InsightDirection.DOWN
+                    )
+                )
+        return insights
+
+    def check_stop_loss(self, insights: List[Insight]) -> List[Insight]:
+        for symbol in self.symbols_with_news:
+            symbol_data = self.symbol_data_by_symbol[symbol]
+
+            if self.close_cross_ema_200(
+                symbol_data.bar_window, symbol_data.ema_200
+            ):  # Stop Loss
+                insights.append(
+                    Insight.price(
+                        symbol,
+                        timedelta(hours=1),
+                        direction=InsightDirection.FLAT,
+                    )
+                )
+        return insights
+
+    def update(self, algorithm: QCAlgorithm, slice: Slice) -> List[Insight]:
+        insights = []
+
+        if len(slice.bars) > 0:
+            self.update_bars(slice.bars)
+
+        # TODO only do this for the 13,0 time all the others have no data i think
+        if slice.get(BrainSentimentIndicator7Day).count > 0:
+            self.update_symbols_with_news(slice, algorithm)
+
+        # Issue orders at 9pm
         if algorithm.time.time() == time(21, 1):
-
-            for symbol in self.symbols_with_news:
-                symbol_data = self.symbol_data_by_symbol[symbol]
-
-                if (
-                    slice.bars[symbol].close > symbol_data.ema_50.current.value
-                    and slice.bars[symbol].close > symbol_data.ema_200.current.value
-                    and self.check_previous_bar(symbol_data.bar_window, True)
-                ):
-                    insights.append(
-                        Insight.price(
-                            symbol, timedelta(hours=1), direction=InsightDirection.UP
-                        )
-                    )
-                elif (
-                    slice.bars[symbol].close < symbol_data.ema_50.current.value
-                    and slice.bars[symbol].close < symbol_data.ema_200.current.value
-                    and self.check_previous_bar(symbol_data.bar_window, False)
-                ):
-                    insights.append(
-                        Insight.price(
-                            symbol, timedelta(hours=1), direction=InsightDirection.DOWN
-                        )
-                    )
+            insights += self.generate_insights(slice, insights)
 
         if algorithm.time.time() > time(21, 1):
-            for symbol in self.symbols_with_news:
-                symbol_data = self.symbol_data_by_symbol[symbol]
-
-                if self.price_cross_ema_200(
-                    symbol_data.bar_window, symbol_data.ema_200
-                ):  # Stop Loss
-                    insights.append(
-                        Insight.price(
-                            symbol,
-                            timedelta(hours=2),
-                            direction=InsightDirection.FLAT,
-                        )
-                    )
+            insights += self.check_stop_loss(insights)
 
         if algorithm.time.time() == time(22, 0):
             self.symbols_with_news = []
@@ -86,8 +99,8 @@ class BrainSentimentAlphaModel(AlphaModel):
         return insights
 
     def check_previous_bar(self, bar_window, is_long):
-        op_1 = gt if is_long else lt
-        op_2 = lt if is_long else gt
+        def evaluate(condition, is_long):
+            return condition if is_long else not condition
 
         def get_bar_range(bar):
             return bar.high - bar.low
@@ -96,10 +109,14 @@ class BrainSentimentAlphaModel(AlphaModel):
             return 1 if bar.open > bar.close else -1
 
         if (
-            op1(get_bar_range(bar_window[0]), get_bar_range(bar_window[1]))
+            evaluate(
+                get_bar_range(bar_window[0]) > get_bar_range(bar_window[1]), is_long
+            )
             and get_bar_direction(bar_window[0]) == 1
         ) or (
-            op2(get_bar_range(bar_window[0]), get_bar_range(bar_window[1]))
+            evaluate(
+                get_bar_range(bar_window[0]) < get_bar_range(bar_window[1]), is_long
+            )
             and get_bar_direction(bar_window[0]) == -1
         ):
             return True
