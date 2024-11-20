@@ -1,0 +1,4 @@
+quantconnect-stubs
+pytest
+pythonnet
+lean

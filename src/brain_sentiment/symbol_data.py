@@ -1,6 +1,8 @@
 # region imports
 from AlgorithmImports import *
-from QuantConnect.DataSource import *
+from typing import Any
+
+# from QuantConnect.DataSource import *
 
 # endregion
 
@@ -8,7 +10,7 @@ from QuantConnect.DataSource import *
 # Your New Python File
 class SymbolData:
 
-    def __init__(self, algorithm: QCAlgorithm, symbol: Symbol) -> None:
+    def __init__(self, algorithm: Any, symbol: Any) -> None:
         self.algorithm = algorithm
         # Requesting the processed shorter term (7-day) sentiment score data for sentiment trading
         self.dataset_symbol = algorithm.add_data(

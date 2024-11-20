@@ -16,16 +16,27 @@ class BrainSentimentUniverseSelectionModel:
         data: List[BrainSentimentIndicatorUniverse],
     ) -> List[Symbol]:
         # Filter data with valid sentimental buzz
-        data_with_buzz = [
-            x
-            for x in data
-            if x.sentimental_buzz_volume_7_days and x.sentimental_buzz_volume_7_days > 1
+        data_with_buzz_and_sentiment = [
+            x for x in data if x.sentimental_buzz_volume_7_days and x.sentiment_7_days
         ]
         # Find intersection with fundamental symbols
-        buzz_symbols = {d.symbol for d in data_with_buzz}
+        buzz_symbols = {d.symbol for d in data_with_buzz_and_sentiment}
         intersection = buzz_symbols & set(
             self.fundamental_universe_ref.fundamental_symbols
         )
+
+        # compute impact score: sentiment_7_days * sentimental_buzz_volume_7_days
+        impact_list = []
+        for d in data_with_buzz_and_sentiment:
+            if d.symbol in intersection:
+                impact_score = (
+                    abs(d.sentiment_7_days) * d.sentimental_buzz_volume_7_days
+                )
+                impact_list.append((d.symbol, impact_score))
+
+        top_25_impact = nlargest(25, impact_list, key=lambda x: x[1])
+
+        return [symbol for symbol, _ in top_25_impact]
 
         # # Prepare heaps for top positive and negative sentiments
         # top_positive = []
@@ -33,7 +44,7 @@ class BrainSentimentUniverseSelectionModel:
 
         # for d in data_with_buzz:
         #     if d.symbol in intersection:
-        #         if d.sentiment_7_days > 0:
+        #         if abs(d.sentiment_7_days) > 0.4:
         #             top_positive.append((d.sentiment_7_days, d))
         #         elif d.sentiment_7_days < 0:
         #             top_negative.append((d.sentiment_7_days, d))
@@ -46,4 +57,5 @@ class BrainSentimentUniverseSelectionModel:
         # selected_symbols = [d.symbol for _, d in top_25_positive + top_25_negative]
 
         # return selected_symbols
-        return list(intersection)
+        # TODO filter by something, we're returning too many, too many data points to process.
+        # return list(intersection)
