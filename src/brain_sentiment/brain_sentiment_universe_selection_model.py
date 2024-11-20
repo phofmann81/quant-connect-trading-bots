@@ -1,61 +1,58 @@
 # region imports
 from AlgorithmImports import *
 from heapq import nlargest
+import statistics as s
+
+
+class UniverseSymbolData:
+    def __init__(self):
+        self.window = RollingWindow[BrainSentimentIndicatorUniverse](2)
 
 
 class BrainSentimentUniverseSelectionModel:
-    def __init__(self, fundamental_universe_ref):
+    def __init__(self, fundamental_universe_ref, algorithm):
         """
         Parameters:
         - fundamental_symbols_ref: A reference to the list of fundamental symbols from FundamentalUniverseSelectionModel.
         """
         self.fundamental_universe_ref = fundamental_universe_ref
+        self.symbol_data_by_symbol = {}
+        self.algorithm = algorithm
+
+    def get_diff(self, window):
+        if window[0].sentiment_7_days is None or window[1].sentiment_7_days is None:
+            return 0
+        return abs(window[1].sentiment_7_days - window[0].sentiment_7_days)
+
+    def is_jump(self, window):
+        if window[0].sentiment_7_days is None or window[1].sentiment_7_days is None:
+            return False
+
+        diff = window[1].sentiment_7_days - window[0].sentiment_7_days
+
+        return abs(diff) > 0.2
 
     def universe_selection(
         self,
         data: List[BrainSentimentIndicatorUniverse],
     ) -> List[Symbol]:
-        # Filter data with valid sentimental buzz
-        data_with_buzz_and_sentiment = [
-            x for x in data if x.sentimental_buzz_volume_7_days and x.sentiment_7_days
-        ]
-        # Find intersection with fundamental symbols
-        buzz_symbols = {d.symbol for d in data_with_buzz_and_sentiment}
-        intersection = buzz_symbols & set(
-            self.fundamental_universe_ref.fundamental_symbols
+
+        news_today = []
+        diffs = []
+
+        for b in data:
+            if b.symbol not in self.symbol_data_by_symbol:
+                self.symbol_data_by_symbol[b.symbol] = UniverseSymbolData()
+
+            self.symbol_data_by_symbol[b.symbol].window.add(b)
+
+            if self.symbol_data_by_symbol[b.symbol].window.is_ready:
+                diffs.append(self.get_diff(self.symbol_data_by_symbol[b.symbol].window))
+                if self.is_jump(self.symbol_data_by_symbol[b.symbol].window):
+                    news_today.append(b.symbol)
+
+        stats = [round(q, 1) for q in s.quantiles(diffs, n=100)][-5:]
+        self.algorithm.debug(f"diff 95 percentile stats: {stats}")
+        return list(
+            set(news_today) & set(self.fundamental_universe_ref.fundamental_symbols)
         )
-
-        # compute impact score: sentiment_7_days * sentimental_buzz_volume_7_days
-        impact_list = []
-        for d in data_with_buzz_and_sentiment:
-            if d.symbol in intersection:
-                impact_score = (
-                    abs(d.sentiment_7_days) * d.sentimental_buzz_volume_7_days
-                )
-                impact_list.append((d.symbol, impact_score))
-
-        top_25_impact = nlargest(25, impact_list, key=lambda x: x[1])
-
-        return [symbol for symbol, _ in top_25_impact]
-
-        # # Prepare heaps for top positive and negative sentiments
-        # top_positive = []
-        # top_negative = []
-
-        # for d in data_with_buzz:
-        #     if d.symbol in intersection:
-        #         if abs(d.sentiment_7_days) > 0.4:
-        #             top_positive.append((d.sentiment_7_days, d))
-        #         elif d.sentiment_7_days < 0:
-        #             top_negative.append((d.sentiment_7_days, d))
-
-        # # Select top 25 from each category
-        # top_25_positive = nlargest(25, top_positive, key=lambda x: x[0])
-        # top_25_negative = nlargest(25, top_negative, key=lambda x: x[0])
-
-        # # Extract symbols from the top selections
-        # selected_symbols = [d.symbol for _, d in top_25_positive + top_25_negative]
-
-        # return selected_symbols
-        # TODO filter by something, we're returning too many, too many data points to process.
-        # return list(intersection)
